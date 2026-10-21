@@ -99,6 +99,88 @@ class Connection {
 }
 let BuildingMap=newBuildingMap();let mode='build',hover={x:0,y:1,valid:false},dragging=false,lastDragKey='',lastDragPt=null,buildLastCell=null,buildPainted=new Set(),lastAnalysis=null,frame=0,previous=performance.now();
 let sim=newPhysicsState();
+const replayConfig={checkpointSteps:30,maxBytes:64*1024*1024,maxSteps:1200};
+let precalcActive=false,precalcCancelRequested=false,replayTimeline=[],replayPlaying=false,replayElapsed=0,replayIndex=0,replayBakeId=0,replayFingerprintAtBake='';
+function cloneReplayGraph(value){return window.FrameLabReplayTools.cloneGraph(value)}
+function captureReplayState(){const state=cloneReplayGraph({sim,BuildingMap,environment:ENVIRONMENT,NX,NY});state.sim.running=false;return state}
+function replayStateBytes(state){return window.FrameLabReplayTools.estimateBytes(state)}
+function restoreReplayState(saved){
+ const state=cloneReplayGraph(saved);sim=state.sim;BuildingMap=state.BuildingMap;NX=state.NX;NY=state.NY;
+ DX=(GRID_RIGHT-GRID_LEFT)/NX;STORY_PX=(GROUND_Y-120)/NY;Object.assign(ENVIRONMENT,state.environment);
+ sim.running=false;physicsAccumulator=0;gravityTether=null;dragging=false;
+ $('baysInput').value=NX;$('levelsInput').value=NY;$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;
+ refreshAnalysis();updateMetrics();draw();syncButtons();
+}
+function replayFingerprint(){
+ const design={NX,NY,members:{},environment:{moisture:ENVIRONMENT.moisture,waterLevel:ENVIRONMENT.waterLevel,windSpeed:ENVIRONMENT.windSpeed,windDirection:ENVIRONMENT.windDirection},computeMode:$('computeMode')?.value,quality:$('qualityPreset')?.value};
+ for(const group of Object.keys(BuildingMap).sort())design.members[group]=Object.entries(BuildingMap[group]||{}).sort(([a],[b])=>a.localeCompare(b)).map(([key,e])=>[key,e.x,e.y,e.material,e.mass,e.capacity,e.kind,e.direction]);
+ try{return JSON.stringify(design)}catch(_){return ''}
+}
+function setReplayStatus(message){const node=$('replayStatus');if(node)node.textContent=message}
+function updateReplayControls(){
+ const has=replayTimeline.length>1,slider=$('replayTimeline');$('replayPlay').disabled=!has||replayPlaying;$('replayPause').disabled=!has||!replayPlaying;$('replayStop').disabled=!has;
+ slider.disabled=!has;slider.max=String(Math.max(0,replayTimeline.length-1));slider.value=String(Math.min(replayIndex,Math.max(0,replayTimeline.length-1)));
+ const state=replayTimeline[replayIndex];$('replayTimeLabel').textContent=state?`${Number(state.sim.time).toFixed(2)} s`:'0.00 s';
+}
+function stopReplayPlayback(){replayPlaying=false;replayElapsed=0;updateReplayControls()}
+function seekReplay(index){
+ if(!replayTimeline.length)return;
+ if(replayFingerprint()!==replayFingerprintAtBake){stopReplayPlayback();setReplayStatus('Replay is stale: design, environment, or compute settings changed. Bake again before replaying.');return}
+ replayIndex=Math.max(0,Math.min(replayTimeline.length-1,Math.round(Number(index)||0)));stopReplayPlayback();restoreReplayState(replayTimeline[replayIndex]);updateReplayControls();
+ setReplayStatus(`Replay checkpoint ${replayIndex+1}/${replayTimeline.length} · ${Number(sim.time).toFixed(2)} s. Timeline seeks recorded physics checkpoints.`);
+}
+async function runPrecalculation(){
+ if(precalcActive)return;
+ if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before pre-calculating physics.',false);return}
+ if(physicsStepBusy){setStatus('Wait for the current physics step to finish, then start pre-calculation.',false);return}
+ stopReplayPlayback();precalcActive=true;precalcCancelRequested=false;const bakeId=++replayBakeId;
+ const controls=[...document.querySelectorAll('.panel button,.panel input,.panel select')].filter(el=>el.id!=='cancelPrecalculate');
+ const previousDisabled=new Map(controls.map(el=>[el,el.disabled]));for(const el of controls)el.disabled=true;
+ $('cancelPrecalculate').disabled=false;$('precalculate').textContent='Baking…';
+ const progress=$('precalcProgress');progress.max=1;progress.value=0;
+ let baseline=null,timeline=[],usedBytes=0,completed=0,limit=Math.max(1,Math.min(replayConfig.maxSteps,Math.round(Number($('precalcDuration').value||5)/DT))),memoryLimited=false;
+ try{
+  baseline=captureReplayState();usedBytes=replayStateBytes(baseline);timeline.push(baseline);
+  sim.running=true;sim.peakUtil=lastAnalysis?.maxUtil||0;physicsAccumulator=0;
+  setReplayStatus(`Pre-calculating 0.00 / ${(limit*DT).toFixed(2)} seconds…`);
+  for(let i=1;i<=limit;i++){
+   if(precalcCancelRequested||bakeId!==replayBakeId)break;
+   ENVIRONMENT.windTime+=DT;await stepPhysics(DT);completed=i;
+   if(i%replayConfig.checkpointSteps===0||i===limit||!sim.running){
+    const checkpoint=captureReplayState(),bytes=replayStateBytes(checkpoint);
+    if(usedBytes+bytes>replayConfig.maxBytes){memoryLimited=true;break}
+    timeline.push(checkpoint);usedBytes+=bytes;
+   }
+   progress.value=i/limit;
+   if(i%6===0){setReplayStatus(`Pre-calculating ${(i*DT).toFixed(2)} / ${(limit*DT).toFixed(2)} seconds · ${Math.round(i/limit*100)}% · ${Math.ceil(usedBytes/1048576)} MB estimated`);await new Promise(resolve=>setTimeout(resolve,0))}
+   if(!sim.running)break;
+  }
+  if(precalcCancelRequested||bakeId!==replayBakeId){restoreReplayState(baseline);setReplayStatus('Pre-calculation cancelled; original simulation state restored.');return}
+  replayTimeline=timeline;replayIndex=0;restoreReplayState(baseline);replayFingerprintAtBake=replayFingerprint();updateReplayControls();
+  if(memoryLimited)setReplayStatus(`Bake stopped at the 64 MB replay memory budget. Saved ${replayTimeline.length} checkpoints; shorten the duration or use a smaller design.`);
+  else if(replayTimeline.length>1)setReplayStatus(`Bake complete: ${replayTimeline.length} checkpoints across ${Number(replayTimeline[replayTimeline.length-1].sim.time-replayTimeline[0].sim.time).toFixed(2)} simulated seconds · ${Math.ceil(usedBytes/1048576)} MB estimated. Replay supports seek, pause, and speed controls.`);
+  else setReplayStatus('No replay checkpoints were produced. Try a longer duration or a smaller model.');
+ }catch(error){if(baseline)restoreReplayState(baseline);replayTimeline=[];updateReplayControls();setReplayStatus(`Pre-calculation failed safely: ${error?.message||'unknown error'}. Starting state restored.`)}
+ finally{
+  if(baseline&&sim.running)restoreReplayState(baseline);
+  precalcActive=false;precalcCancelRequested=false;physicsAccumulator=0;
+  for(const el of controls)el.disabled=previousDisabled.get(el);
+  $('cancelPrecalculate').disabled=true;$('precalculate').textContent='Pre-calculate';progress.value=completed/limit;updateReplayControls();draw();
+ }
+}
+function cancelPrecalculation(){if(!precalcActive)return;precalcCancelRequested=true;replayBakeId++;$('cancelPrecalculate').disabled=true;setReplayStatus('Cancelling after the current solver step…')}
+function startReplayPlayback(){
+ if(replayTimeline.length<2)return;
+ if(replayFingerprint()!==replayFingerprintAtBake){setReplayStatus('Replay is stale: design, environment, or compute settings changed. Bake again before replaying.');return}
+ if(replayIndex>=replayTimeline.length-1)seekReplay(0);
+ replayPlaying=true;replayElapsed=0;updateReplayControls();setReplayStatus('Replay playing from recorded checkpoints.');
+}
+function advanceReplay(elapsed){
+ if(!replayPlaying||precalcActive||replayTimeline.length<2)return;
+ replayElapsed+=elapsed*Math.max(.05,Number($('replaySpeed').value)||1);const interval=replayConfig.checkpointSteps*DT;
+ while(replayElapsed>=interval&&replayPlaying){replayElapsed-=interval;if(replayIndex>=replayTimeline.length-1){stopReplayPlayback();setReplayStatus('Replay finished. Seek the timeline to inspect a recorded checkpoint.');break}replayIndex++;restoreReplayState(replayTimeline[replayIndex]);updateReplayControls()}
+}
+
 function countOutOfBounds(bays,levels){
  let removed=0;
  for(const [group,items] of Object.entries(BuildingMap))for(const e of Object.values(items||{})){
@@ -1271,7 +1353,7 @@ function drawStabilityVector(){
 }
 function validateDesign(){const a=refreshAnalysis();draw();if(!a.count){setStatus('Empty design. Place columns, beams and slabs before validating.');return}const detached=Object.values(sim.nodes).filter(n=>n.referenceLevel>0&&!n.isGroundConnected).length,st=sim.stability.primary,angleDeg=st?Math.abs(st.dynamics.rotation)*180/Math.PI:0,stabilityText=!st?'No assembly stability estimate available.':!st.supportPoints.length?'No foundation supports remain for the highlighted assembly.':st.shouldTip?`Center of mass lies ${Math.abs(st.marginWorld/STORY_HEIGHT).toFixed(2)} bay-widths outside the support span; predicted tipping is toward the ${st.tippingDirection}.`:angleDeg>=18?`Assembly tilt is ${angleDeg.toFixed(0)}°, above the 18° cascading-stress threshold; the current lean is toward the ${st.tippingDirection}.`:`Center-of-mass projection is within the support span (${Math.round(st.stabilityMetric)}% stability margin).`;const msg=a.issues.length||detached?`INSUFFICIENT SUPPORT · ${a.issues.length} static issue(s), ${detached} joint(s) without a continuous healthy path to the foundation. ${stabilityText} ${a.issues.slice(0,2).join(' ')}`:st?.shouldTip?`DIRECTIONAL TIPPING RISK · ${st.tippingDirection.toUpperCase()}. ${stabilityText}`:angleDeg>=18?`CASCADE RISK · TILT-INDUCED MEMBER STRESS IS ABOVE THE CRITICAL ANGLE. ${stabilityText}`:a.maxUtil>1?`OVER CAPACITY · Peak utilization ${(a.maxUtil*100).toFixed(0)}%. ${a.overloaded} member(s) exceed modeled capacity. ${stabilityText}`:`STRUCTURALLY SOUND IN THIS MODEL · Peak utilization ${(a.maxUtil*100).toFixed(0)}%. ${stabilityText}`;setStatus(a.failedMembers?`${msg} ${a.failedMembers} member(s) are failed or hinged and excluded from active capacity; detached failed members become debris.`:msg);if(a.warnings.length)setStatus(`Notes: ${a.warnings.slice(0,2).join(' ')}`,true);else setStatus('Validation includes local column load paths, capacity redistribution to connected neighboring supports, floating-cluster detection and member integrity. This remains a simplified educational estimate.',true)}
 function syncButtons(){document.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode))});$('liveDot').classList.toggle('running',sim.running);$('simulate').textContent=sim.running?'Ⅱ Pause':'▶ Simulate';$('simulate').setAttribute('aria-pressed',String(sim.running))}
-function startOrPause(){if(sim.running){sim.running=false;syncButtons();updateMetrics();return}if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before starting physics.');return}refreshAnalysis();sim.running=true;sim.peakUtil=lastAnalysis.maxUtil;syncButtons();setStatus('Simulation started. Local load redistribution, bending fracture, debris rigid-body motion, swept contact checks, mass-weighted impulses, rotated debris collisions with friction and angular response, material impact resistance, deformation, fragmentation and distance-limited shockwave damage are active.',true);}
+function startOrPause(){if(precalcActive)return;if(replayPlaying||replayTimeline.length){stopReplayPlayback();replayTimeline=[];updateReplayControls()}if(sim.running){sim.running=false;syncButtons();updateMetrics();return}if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before starting physics.');return}refreshAnalysis();sim.running=true;sim.peakUtil=lastAnalysis.maxUtil;syncButtons();setStatus('Simulation started. Local load redistribution, bending fracture, debris rigid-body motion, swept contact checks, mass-weighted impulses, rotated debris collisions with friction and angular response, material impact resistance, deformation, fragmentation and distance-limited shockwave damage are active.',true);}
 function clearDesign(){if(!confirm('Clear all columns, beams, slabs and loads?'))return;BuildingMap=newBuildingMap();resetPhysics(false);setStatus('Empty design. Place columns, beams and slabs, then choose Validate.',false);setStatus('Design cleared. Build Mode is ready.',true)}
 function exampleFrame(){BuildingMap=newBuildingMap();const supports=[...new Set([Math.round(NX*.16),Math.round(NX*.42),Math.round(NX*.68),Math.round(NX*.92)].map(x=>clamp(x,0,NX)))].sort((a,b)=>a-b),levels=Math.min(4,NY);for(const x of supports)for(let y=0;y<levels;y++)BuildingMap.columns[keyOf(x,y)]=makeElement('column',x,y,'steel');for(let y=1;y<=levels;y++)for(let x=supports[0];x<supports[supports.length-1];x++){BuildingMap.beams[keyOf(x,y)]=makeElement('beam',x,y,'steel');BuildingMap.slabs[keyOf(x,y)]=makeElement('slab',x,y,'concrete')}const midBay=clamp(Math.floor((supports[0]+supports[supports.length-1])*.5),0,NX-1);for(const x of [clamp(midBay-1,0,NX-1),midBay])if(x<NX)BuildingMap.loads[keyOf(x,levels)]={x,y:levels,mass:2,capacity:0,integrity:1,failed:false,kind:'load'};for(const y of [1,Math.min(3,levels-1)])if(y<NY){const x=clamp(midBay-1,0,NX-1);for(const direction of ['up','down']){const k=braceKeyOf(x,y,direction);BuildingMap.braces[k]=makeElement('brace',x,y,'steel');BuildingMap.braces[k].direction=direction}}resetPhysics(true);validateDesign();setStatus(`Example frame loaded for a ${NX}-bay × ${NY}-level grid: ${levels} modeled levels with mixed steel/concrete members and roof loads.`,true)}
 function saveJSON(){const payload={format:'FrameLab BuildingMap',version:1,dimensions:{bays:NX,levels:NY,storyHeight:STORY_HEIGHT},materialLibrary:MATERIALS,BuildingMap};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='framelabs-2-building-design.json';document.body.appendChild(a);a.click();a.remove();window.setTimeout(()=>URL.revokeObjectURL(url),1500);setStatus('Design JSON export created. This file includes the editable design and saved member state, but not a live simulation replay.',true)}
@@ -1325,7 +1407,7 @@ async function runPerformanceBenchmark(){
 let physicsAccumulator=0,physicsStepBusy=false;
 const MAX_PHYSICS_STEPS_PER_FRAME=8;
 async function processPhysicsSteps(){
- if(physicsStepBusy)return;
+ if(precalcActive||physicsStepBusy)return;
  physicsStepBusy=true;let steps=0;
  try{
   while(physicsAccumulator+1e-9>=DT&&steps<MAX_PHYSICS_STEPS_PER_FRAME&&sim.running){
@@ -1345,13 +1427,14 @@ async function processPhysicsSteps(){
 function animate(now){
  // Rendering continues on requestAnimationFrame while numerical kernels run asynchronously.
  // Physics retains the fixed 120 Hz step and bounded accumulator, with no overlapping step jobs.
- const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;ENVIRONMENT.windTime+=elapsed;updateAtmosphericParticles(elapsed);
- if(sim.running){
+ const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;if(!precalcActive&&!replayTimeline.length){ENVIRONMENT.windTime+=elapsed;updateAtmosphericParticles(elapsed)}
+ advanceReplay(elapsed);
+ if(sim.running&&!precalcActive){
   physicsAccumulator=Math.min(physicsAccumulator+elapsed,DT*MAX_PHYSICS_STEPS_PER_FRAME);
   if(!physicsStepBusy)void processPhysicsSteps();
   if(!physicsStepBusy&&(frame++%4)===0){refreshAnalysis();updateMetrics()}
   draw();
- }else{physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);draw()}}
+ }else if(!precalcActive&&!replayTimeline.length){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);draw()}}
  requestAnimationFrame(animate);
 }
 
@@ -1372,7 +1455,7 @@ document.addEventListener('keydown',e=>{
  else if(key==='v'){e.preventDefault();validateDesign()}
  else if(e.code==='Space'){e.preventDefault();startOrPause()}
  else if(e.key==='Escape'){dragging=false;lastDragKey='';lastDragPt=null;hover.valid=false;draw()}
-});$('componentType').addEventListener('change',()=>{buildPainted=new Set();updateToolStatus();draw()});$('braceDirection').addEventListener('change',draw);$('loadAmount').addEventListener('input',()=>{$('loadOut').textContent=Number($('loadAmount').value).toFixed(1)});$('explosionPower').addEventListener('input',()=>{$('explosionOut').textContent=$('explosionPower').value;updateToolStatus()});$('applyDimensions').addEventListener('click',()=>configureGridDimensions($('baysInput').value,$('levelsInput').value));$('baysInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('levelsInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('displayMode').addEventListener('change',draw);$('validate').addEventListener('click',validateDesign);$('simulate').addEventListener('click',startOrPause);$('resetPhysics').addEventListener('click',()=>{resetPhysics(true);setStatus('Physics reset. Member integrity and joint motion were restored; the design layout was preserved.',true);setStatus('Physics reset. Run Validate for a fresh written assessment of the restored design.',false)});$('example').addEventListener('click',exampleFrame);$('loadExample').addEventListener('click',loadSelectedExample);$('exampleFrames').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadSelectedExample()}});$('clear').addEventListener('click',clearDesign);$('save').addEventListener('click',saveJSON);$('loadJson').addEventListener('click',()=>$('fileInput').click());$('fileInput').addEventListener('change',e=>{loadJSONFile(e.target.files?.[0]);e.target.value=''});canvas.addEventListener('pointerdown',handleCanvasDown);canvas.addEventListener('pointermove',handlePointerMove);canvas.addEventListener('pointerup',handlePointerUp);canvas.addEventListener('pointercancel',handlePointerUp);canvas.addEventListener('pointerleave',()=>{if(!dragging){hover.valid=false;draw()}});$('loadOut').textContent=Number($('loadAmount').value).toFixed(1);$('explosionOut').textContent=$('explosionPower').value;$('windOut')&&($('windOut').textContent='0 km/h · Calm');$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;setMode('build');refreshAll();syncButtons();
+});$('componentType').addEventListener('change',()=>{buildPainted=new Set();updateToolStatus();draw()});$('braceDirection').addEventListener('change',draw);$('loadAmount').addEventListener('input',()=>{$('loadOut').textContent=Number($('loadAmount').value).toFixed(1)});$('explosionPower').addEventListener('input',()=>{$('explosionOut').textContent=$('explosionPower').value;updateToolStatus()});$('applyDimensions').addEventListener('click',()=>configureGridDimensions($('baysInput').value,$('levelsInput').value));$('baysInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('levelsInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('displayMode').addEventListener('change',draw);$('validate').addEventListener('click',validateDesign);$('simulate').addEventListener('click',startOrPause);$('precalculate').addEventListener('click',()=>void runPrecalculation());$('cancelPrecalculate').addEventListener('click',cancelPrecalculation);$('replayTimeline').addEventListener('input',e=>seekReplay(e.target.value));$('replayPlay').addEventListener('click',startReplayPlayback);$('replayPause').addEventListener('click',()=>{stopReplayPlayback();setReplayStatus('Replay paused. Seek the timeline or press Replay to continue.');});$('replayStop').addEventListener('click',()=>{stopReplayPlayback();seekReplay(0);setReplayStatus('Replay stopped at the first checkpoint.');});$('resetPhysics').addEventListener('click',()=>{if(replayTimeline.length){replayTimeline=[];stopReplayPlayback();updateReplayControls();setReplayStatus('Replay cleared because physics was reset. Bake again to record a new run.')}resetPhysics(true);setStatus('Physics reset. Member integrity and joint motion were restored; the design layout was preserved.',true);setStatus('Physics reset. Run Validate for a fresh written assessment of the restored design.',false)});$('example').addEventListener('click',exampleFrame);$('loadExample').addEventListener('click',loadSelectedExample);$('exampleFrames').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadSelectedExample()}});$('clear').addEventListener('click',clearDesign);$('save').addEventListener('click',saveJSON);$('loadJson').addEventListener('click',()=>$('fileInput').click());$('fileInput').addEventListener('change',e=>{loadJSONFile(e.target.files?.[0]);e.target.value=''});canvas.addEventListener('pointerdown',handleCanvasDown);canvas.addEventListener('pointermove',handlePointerMove);canvas.addEventListener('pointerup',handlePointerUp);canvas.addEventListener('pointercancel',handlePointerUp);canvas.addEventListener('pointerleave',()=>{if(!dragging){hover.valid=false;draw()}});$('loadOut').textContent=Number($('loadAmount').value).toFixed(1);$('explosionOut').textContent=$('explosionPower').value;$('windOut')&&($('windOut').textContent='0 km/h · Calm');$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;setMode('build');refreshAll();syncButtons();
 const cpuWarning=$('cpuWarning'),dismissCpuWarning=$('dismissCpuWarning');
 if(dismissCpuWarning) dismissCpuWarning.addEventListener('click',()=>{if(cpuWarning?.close)cpuWarning.close();else cpuWarning?.removeAttribute('open')});
 // Show on every page load; intentionally do not persist dismissal between visits.
