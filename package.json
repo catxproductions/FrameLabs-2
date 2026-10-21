@@ -1,0 +1,13 @@
+{
+  "name": "framelab-parallel-compute",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FrameLab with CPU-worker/WebGPU live body integration and structural compute diagnostics.",
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node --check js/main.js && node --check js/compute-backends.js && node --check js/compute-worker.js && node --check js/physics-model.js && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
