@@ -1427,14 +1427,14 @@ async function processPhysicsSteps(){
 function animate(now){
  // Rendering continues on requestAnimationFrame while numerical kernels run asynchronously.
  // Physics retains the fixed 120 Hz step and bounded accumulator, with no overlapping step jobs.
- const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;ENVIRONMENT.windTime+=elapsed;updateAtmosphericParticles(elapsed);
+ const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;if(!precalcActive&&!replayTimeline.length){ENVIRONMENT.windTime+=elapsed;updateAtmosphericParticles(elapsed)}
  advanceReplay(elapsed);
  if(sim.running&&!precalcActive){
   physicsAccumulator=Math.min(physicsAccumulator+elapsed,DT*MAX_PHYSICS_STEPS_PER_FRAME);
   if(!physicsStepBusy)void processPhysicsSteps();
   if(!physicsStepBusy&&(frame++%4)===0){refreshAnalysis();updateMetrics()}
   draw();
- }else if(!precalcActive){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);draw()}}
+ }else if(!precalcActive&&!replayTimeline.length){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);draw()}}
  requestAnimationFrame(animate);
 }
 
