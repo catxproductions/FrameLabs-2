@@ -8,7 +8,34 @@ const GRAVITY=9.81,MAX_FALL_SPEED=15,IMPACT_RESTITUTION=.12,IMPACT_TRANSFER_EFFI
 const PHYSICS_MODEL=window.FrameLabPhysicsModel||null;
 const QUALITY_PRESETS={entry:{label:'Entry',pixelRatio:1,maxDebris:90,maxParticles:170,constraintIterations:5,contactShadows:false,atmosphere:false,wetHighlights:false},balanced:{label:'Balanced',pixelRatio:1.5,maxDebris:170,maxParticles:360,constraintIterations:8,contactShadows:true,atmosphere:true,wetHighlights:true},enthusiast:{label:'Enthusiast',pixelRatio:2,maxDebris:280,maxParticles:600,constraintIterations:11,contactShadows:true,atmosphere:true,wetHighlights:true}};
 let MAX_DEBRIS=QUALITY_PRESETS.balanced.maxDebris,MAX_ATMOSPHERIC_PARTICLES=QUALITY_PRESETS.balanced.maxParticles,QUALITY_PROFILE=QUALITY_PRESETS.balanced,qualityMode='auto',showSimulationOverlays=true,gravityTether=null;
-const ENVIRONMENT={moisture:0,waterLevel:0};
+const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1,windTime:0};
+function windSpeedRatio(){return clamp((Number(ENVIRONMENT.windSpeed)||0)/100,0,1)}
+function windDirectionSign(){return Number(ENVIRONMENT.windDirection)<0?-1:1}
+function windGustFactor(time=ENVIRONMENT.windTime){return clamp(1+.16*Math.sin((Number(time)||0)*1.13)+.08*Math.sin((Number(time)||0)*.47+1.7),.70,1.24)}
+function windLoadForMember(kind,e){
+ const pressure=windSpeedRatio()**2;if(pressure<=.0001||!e)return 0;
+ const edge=(kind==='column'?(e.x===0||e.x===NX):(e.x===0||e.x>=NX-1));
+ const windward=windDirectionSign()>0?(e.x===0):(e.x===(kind==='column'?NX:NX-1));
+ const exposure=edge?(windward?1.35:.82):.38;
+ const height=clamp(((Number(e.y)||0)+(kind==='column'?.5:0))/Math.max(1,NY),0,1);
+ const typeFactor={column:1.15,beam:.18,slab:.08,brace:.42}[kind]||.2;
+ return pressure*(.4+.6*height)*exposure*typeFactor*2.8;
+}
+function updateLateralSway(dt){
+ const step=clamp(Number(dt)||0,0,.05);if(step<=0)return;
+ const old=Array.from(sim.lateralDisp),speed=windSpeedRatio(),direction=windDirectionSign(),gust=windGustFactor();
+ // Scale the per-story forcing with grid height so a 300-level model remains bounded.
+ const heightScale=Math.pow(8/Math.max(8,NY),2);
+ for(let level=1;level<=NY;level++){
+  const below=old[level-1]-old[level],above=level<NY?old[level+1]-old[level]:0;
+  const windAx=direction*speed*speed*(.035+.22*level/Math.max(1,NY))*gust*heightScale;
+  const ax=below*10+above*5-3.8*sim.lateralVel[level]+windAx;
+  sim.lateralVel[level]=clamp(sim.lateralVel[level]+ax*step,-7,7);
+  sim.lateralDisp[level]=clamp(sim.lateralDisp[level]+sim.lateralVel[level]*step,-2.6,2.6);
+  sim.floors[level].position.x=sim.lateralDisp[level];sim.floors[level].velocity.x=sim.lateralVel[level];sim.floors[level].acceleration.x=ax;
+ }
+ sim.lateralDisp[0]=0;sim.lateralVel[0]=0;
+}
 const IMPACT_RESISTANCE={steel:{column:1.45,beam:1.32,slab:1.18,brace:1.25},concrete:{column:1.12,beam:.96,slab:.84,brace:.86},wood:{column:.72,beam:.62,slab:.54,brace:.52},flammable:{column:.62,beam:.56,slab:.45,brace:.48},explosive:{column:.74,beam:.66,slab:.58,brace:.61}};
 // Flammable and explosive are fictional sandbox materials, not real-world formulations.
 const MATERIALS={steel:{label:'Steel',column:{mass:.22,capacity:28},beam:{mass:.18,capacity:18},slab:{mass:.32,capacity:15},brace:{mass:.12,capacity:13.5},color:'#78caff'},concrete:{label:'Concrete',column:{mass:.42,capacity:17},beam:{mass:.34,capacity:11},slab:{mass:.65,capacity:8},brace:{mass:.24,capacity:7.2},color:'#b4c0d0'},wood:{label:'Wood',column:{mass:.16,capacity:9},beam:{mass:.14,capacity:6},slab:{mass:.28,capacity:3.8},brace:{mass:.08,capacity:4.1},color:'#dca76a'},flammable:{label:'Flammable composite',column:{mass:.18,capacity:7.6},beam:{mass:.15,capacity:5.4},slab:{mass:.27,capacity:3.1},brace:{mass:.085,capacity:3.7},color:'#f39a52'},explosive:{label:'Explosive composite',column:{mass:.26,capacity:8.8},beam:{mass:.22,capacity:6.4},slab:{mass:.4,capacity:4.6},brace:{mass:.12,capacity:4.8},color:'#ed6ca8'}};
@@ -285,7 +312,7 @@ function updateAtmosphericParticles(dt){
   const p=particles[i];p.age+=step;
   if(p.age>=p.life){particles.splice(i,1);continue}
   const phase=p.seed+p.age*(p.kind==='smoke'?1.25:2.6),rise=p.kind==='smoke'?.19:.035;
-  p.vx+=(Math.sin(phase)*p.drift-(p.vx||0)*(p.kind==='smoke'?.08:.16))*step;
+  const windTarget=windDirectionSign()*windSpeedRatio()*(p.kind==='smoke'?.50:.38);p.vx+=(Math.sin(phase)*p.drift+windTarget-(p.vx||0)*(p.kind==='smoke'?.55:.70))*step;
   p.vy+=rise*step;p.x+=p.vx*step;p.y+=p.vy*step;p.size+=p.growth*step;p.rotation+=(p.spin||0)*step;
  }
 }
@@ -347,7 +374,7 @@ function analyzeStructure(){
   nodeLoads[y][x]+=bayMass/2;nodeLoads[y][x+1]+=bayMass/2;
   if((slab&&!slab.failed||load&&!load.failed)&&!baySupported(x,y)){unsupportedFloors.push({x,y});if(!slab||slab.failed)issues.push(`Load at bay ${x+1}, level ${y} has no slab.`);else issues.push(`Bay ${x+1}, level ${y} has insufficient support.`)}
   if(load&&!load.failed)load.unsupported=!(slab&&!slab.failed)&&!baySupported(x,y);
-  if(slab&&!slab.failed){const d=(load&&!load.failed?load.mass:0)+slab.mass*.28;slab.demand=d;slab.unsupported=slab.snapped||!baySupported(x,y);slab.utilization=slab.snapped?Math.max(1.05,d/Math.max(.01,slab.capacity*slab.integrity*Math.max(.18,slab.connectionFactor||1))):d/Math.max(.01,slab.capacity*slab.integrity*Math.max(.18,slab.connectionFactor||1));slab.isLoaded=d>.02;slab.isStressed=slab.utilization>.8;maxUtil=Math.max(maxUtil,slab.utilization);if(slab.utilization>1)overloaded++}
+  if(slab&&!slab.failed){const windDemand=windLoadForMember('slab',slab),d=(load&&!load.failed?load.mass:0)+slab.mass*.28+windDemand;slab.windDemand=windDemand;slab.demand=d;slab.unsupported=slab.snapped||!baySupported(x,y);slab.utilization=slab.snapped?Math.max(1.05,d/Math.max(.01,slab.capacity*slab.integrity*Math.max(.18,slab.connectionFactor||1))):d/Math.max(.01,slab.capacity*slab.integrity*Math.max(.18,slab.connectionFactor||1));slab.isLoaded=d>.02;slab.isStressed=slab.utilization>.8;maxUtil=Math.max(maxUtil,slab.utilization);if(slab.utilization>1)overloaded++}
  }
  // Debris resting on a floor acts as temporary added mass; ground debris is handled as an obstacle instead.
  for(const d of sim.debris||[]){if(!d.settled||d.y<STORY_HEIGHT*.45||d.y>NY*STORY_HEIGHT+STORY_HEIGHT*.2)continue;const level=clamp(Math.round(d.y/STORY_HEIGHT),1,NY),bay=clamp(Math.floor(d.x/STORY_HEIGHT),0,NX-1);nodeLoads[level][bay]+=d.mass*.5;nodeLoads[level][bay+1]+=d.mass*.5;}
@@ -373,13 +400,13 @@ function analyzeStructure(){
  for(const [key,col] of Object.entries(BuildingMap.columns)){
   if(col.failed){col.demand=col.mass;col.utilization=9;col.unsupported=true;continue}
   const bottomSupported=columnStacked(col.x,col.y)||beamComponentHasSupport(col.x,col.y);col.unsupported=!bottomSupported&&col.demand>.04;
-  col.utilization=col.demand/Math.max(.01,col.capacity*col.integrity*Math.max(.18,col.connectionFactor||1));if(col.unsupported)col.utilization=Math.max(1.12,col.utilization);
+  col.windDemand=windLoadForMember('column',col);col.demand+=col.windDemand;col.utilization=col.demand/Math.max(.01,col.capacity*col.integrity*Math.max(.18,col.connectionFactor||1));if(col.unsupported)col.utilization=Math.max(1.12,col.utilization);
   col.isLoaded=col.demand>.02;col.isStressed=col.utilization>.8;maxUtil=Math.max(maxUtil,col.utilization);if(col.utilization>1)overloaded++;
  }
  for(const [key,beam]of Object.entries(BuildingMap.beams)){
   if(beam.failed){beam.demand=beam.mass;beam.utilization=9;beam.unsupported=true;continue}
-  const slab=BuildingMap.slabs[keyOf(beam.x,beam.y)],load=BuildingMap.loads[keyOf(beam.x,beam.y)];let d=(slab&&!slab.failed?slab.mass*.28:0)+(load&&!load.failed?load.mass:0)+beam.mass*.7+(beamRedistribution[key]||0)+Math.max(0,beam.catenaryTension||0)*.09+Math.max(0,beam.plasticSag||0)*beam.capacity*.06;
-  beam.demand=d;beam.unsupported=beam.snapped||!baySupported(beam.x,beam.y);beam.isLoaded=d>.02;
+  const slab=BuildingMap.slabs[keyOf(beam.x,beam.y)],load=BuildingMap.loads[keyOf(beam.x,beam.y)];const windDemand=windLoadForMember('beam',beam);let d=(slab&&!slab.failed?slab.mass*.28:0)+(load&&!load.failed?load.mass:0)+beam.mass*.7+(beamRedistribution[key]||0)+Math.max(0,beam.catenaryTension||0)*.09+Math.max(0,beam.plasticSag||0)*beam.capacity*.06+windDemand;
+  beam.windDemand=windDemand;beam.demand=d;beam.unsupported=beam.snapped||!baySupported(beam.x,beam.y);beam.isLoaded=d>.02;
   if(beam.snapped){beam.bendingMoment=Math.max(beam.bendingMoment||0,beam.momentCapacity||0);beam.momentUtilization=Math.max(1.05,beam.momentUtilization||0);beam.utilization=Math.max(1.05,d/Math.max(.01,beam.capacity*beam.integrity*Math.max(.18,beam.connectionFactor||1)),beam.momentUtilization);beam.isStressed=true;maxUtil=Math.max(maxUtil,beam.utilization);overloaded++;continue}
   const bending=beamBendingData(beam);beam.bendingMoment=bending.moment;beam.effectiveSpan=bending.span.bays;beam.momentUtilization=bending.moment/Math.max(.01,(beam.momentCapacity||beam.capacity*.42)*beam.integrity*Math.max(.18,beam.connectionFactor||1));
   beam.utilization=Math.max(d/Math.max(.01,beam.capacity*beam.integrity*Math.max(.18,beam.connectionFactor||1)),beam.momentUtilization);beam.isStressed=beam.utilization>.8;maxUtil=Math.max(maxUtil,beam.utilization);if(beam.utilization>1)overloaded++;
@@ -387,7 +414,7 @@ function analyzeStructure(){
  for(const [key,brace]of Object.entries(BuildingMap.braces)){
   if(brace.failed){brace.demand=brace.mass;brace.utilization=9;brace.unsupported=true;continue}
   const ends=endpointKeys('braces',brace),a=sim.nodes[ends[0]],b=sim.nodes[ends[1]],loadA=a?nodeLoads[a.referenceLevel]?.[a.gridX]||0:0,loadB=b?nodeLoads[b.referenceLevel]?.[b.gridX]||0:0;
-  brace.demand=brace.mass*.65+(loadA+loadB)*.11+Math.abs(brace.lateralForce||0)*.22+Math.max(0,brace.impactStress||0)*brace.capacity*.08;
+  brace.windDemand=windLoadForMember('brace',brace);brace.demand=brace.mass*.65+(loadA+loadB)*.11+Math.abs(brace.lateralForce||0)*.22+Math.max(0,brace.impactStress||0)*brace.capacity*.08+brace.windDemand;
   const liveEnds=ends.filter(k=>sim.nodes[k]?.isGroundConnected).length;brace.unsupported=liveEnds===0;brace.utilization=brace.demand/Math.max(.01,brace.capacity*brace.integrity*Math.max(.18,brace.connectionFactor||1));if(brace.unsupported)brace.utilization=Math.max(brace.utilization,.72);
   brace.isLoaded=brace.demand>.02;brace.isStressed=brace.utilization>.8;maxUtil=Math.max(maxUtil,brace.utilization);if(brace.utilization>1)overloaded++;
  }
@@ -902,7 +929,7 @@ async function updateDebris(dt){
    const spring=springForce(gravityTether.targetX,gravityTether.targetY,anchorX,anchorY,anchorVx,anchorVy,30);
    tetherFx=spring.x;tetherFy=spring.y;angularAcceleration=(offsetX*tetherFy-offsetY*tetherFx)/Math.max(.03,d.momentOfInertia);
   }
-  const effectiveMass=Math.max(.08,d.mass),ax=environmentForce.ax+tetherFx/effectiveMass,ay=environmentForce.ay+tetherFy/effectiveMass;
+  const effectiveMass=Math.max(.08,d.mass),windRatio=windSpeedRatio(),windAx=clamp(windDirectionSign()*windRatio*windRatio*windGustFactor()*(.12+Math.min(2.1,projectedArea/Math.max(.08,d.mass))*.48),-2.8,2.8),ax=environmentForce.ax+windAx+tetherFx/effectiveMass,ay=environmentForce.ay+tetherFy/effectiveMass;
   const predictedVX=clamp(d.vx+ax*dt,-MAX_FALL_SPEED,MAX_FALL_SPEED);
   const angularDamping=Math.exp(-(.22+Math.max(0,.7-Math.abs(predictedVX))*.18+submerged*1.6)*dt);
   motionSnapshots.set(d.id,{oldX,oldY,oldBounds,oldBottom:oldBounds.bottom});
@@ -1135,9 +1162,8 @@ async function stepPhysics(dt){
  // Member capacities degrade locally; tilt-induced demand and yielding joints feed the same failure threshold.
  for(const link of sim.memberLinks){const e=link.e;if(e.failed||e.snapped)continue;const util=e.utilization||0;if(util>1){sim.overloadTimers[link.id]=(sim.overloadTimers[link.id]||0)+dt;const rate=Math.min(.7,.14+(util-1)*.22);e.integrity=Math.max(0,e.integrity-dt*rate);if(e.integrity<=FAILURE_INTEGRITY){failMember(link,'sustained overload / local redistribution');sim.lastEvent=`OVERLOAD FAILURE · ${e.kind.toUpperCase()} (${link.key})`;sim.eventUntil=sim.time+3}}else sim.overloadTimers[link.id]=Math.max(0,(sim.overloadTimers[link.id]||0)-dt*.15)}
  refreshAnalysis();
- // Retain global lateral excitation while adding local angular motion about each assembly's remaining pivot.
- const old=Array.from(sim.lateralDisp);for(let level=1;level<=NY;level++){const below=old[level-1]-old[level],above=level<NY?old[level+1]-old[level]:0;const ax=below*10+above*5-3.8*sim.lateralVel[level];sim.lateralVel[level]=clamp(sim.lateralVel[level]+ax*dt,-7,7);sim.lateralDisp[level]=clamp(sim.lateralDisp[level]+sim.lateralVel[level]*dt,-2.6,2.6);sim.floors[level].position.x=sim.lateralDisp[level];sim.floors[level].velocity.x=sim.lateralVel[level];sim.floors[level].acceleration.x=ax}
- sim.lateralDisp[0]=0;sim.lateralVel[0]=0;await updateMemberPhysics(dt);if(sim!==activeSimulation)return;updateMaterialHazards(dt);evaluateColumnTiltFailures();await updateDebris(dt);if(sim!==activeSimulation)return;for(const d of sim.debris){containDebrisInGrid(d);d.y=clamp(d.y,-.02,NY*STORY_HEIGHT+STORY_HEIGHT*.8);d.vx=clamp(d.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);d.vy=clamp(d.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);d.angularVelocity=clamp(d.angularVelocity,-3.4,3.4);if(!Number.isFinite(d.x+d.y+d.vx+d.vy+d.angle+d.angularVelocity)){d.x=clamp((d.x||0),-10,50);d.y=0;d.vx=0;d.vy=0;d.angularVelocity=0;d.settled=true;updateDebrisBounds(d)}}a=refreshAnalysis();sim.peakUtil=Math.max(sim.peakUtil,a.maxUtil);lastAnalysis=a;if(sim.localFailureCount!==(sim.reportedFailureCount??0)){sim.reportedFailureCount=sim.localFailureCount;const failedNow=allMembers().filter(({e})=>e.failed||e.snapped).length;const report=`DYNAMIC FAILURE ACTIVE · ${failedNow} member(s) failed or hinged, ${sim.floatingClusters.length} floating cluster(s), peak current utilization ${a.maxUtil>=9?'unbounded':(a.maxUtil*100).toFixed(0)+'%'}. Static validation is refreshed; pause to inspect the load-path overlay.`;$('validationResult').textContent=report;$('eventInfo').textContent=`${sim.lastEvent||'Local member failure'} · ${failedNow} member(s) affected. Last transferred impact energy: ${sim.lastImpactEnergy.toFixed(2)} illustrative units.`;}
+ // Wind drives bounded story sway; the same sway solver also runs while paused for a visible wind preview.
+ updateLateralSway(dt);await updateMemberPhysics(dt);if(sim!==activeSimulation)return;updateMaterialHazards(dt);evaluateColumnTiltFailures();await updateDebris(dt);if(sim!==activeSimulation)return;for(const d of sim.debris){containDebrisInGrid(d);d.y=clamp(d.y,-.02,NY*STORY_HEIGHT+STORY_HEIGHT*.8);d.vx=clamp(d.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);d.vy=clamp(d.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);d.angularVelocity=clamp(d.angularVelocity,-3.4,3.4);if(!Number.isFinite(d.x+d.y+d.vx+d.vy+d.angle+d.angularVelocity)){d.x=clamp((d.x||0),-10,50);d.y=0;d.vx=0;d.vy=0;d.angularVelocity=0;d.settled=true;updateDebrisBounds(d)}}a=refreshAnalysis();sim.peakUtil=Math.max(sim.peakUtil,a.maxUtil);lastAnalysis=a;if(sim.localFailureCount!==(sim.reportedFailureCount??0)){sim.reportedFailureCount=sim.localFailureCount;const failedNow=allMembers().filter(({e})=>e.failed||e.snapped).length;const report=`DYNAMIC FAILURE ACTIVE · ${failedNow} member(s) failed or hinged, ${sim.floatingClusters.length} floating cluster(s), peak current utilization ${a.maxUtil>=9?'unbounded':(a.maxUtil*100).toFixed(0)+'%'}. Static validation is refreshed; pause to inspect the load-path overlay.`;$('validationResult').textContent=report;$('eventInfo').textContent=`${sim.lastEvent||'Local member failure'} · ${failedNow} member(s) affected. Last transferred impact energy: ${sim.lastImpactEnergy.toFixed(2)} illustrative units.`;}
  const primary=sim.stability.primary,hasSupport=!!(primary&&primary.supportPoints.length),movingDebris=sim.debris.some(d=>!d.settled),airborneNodes=Object.values(sim.nodes).some(n=>n.referenceLevel>0&&!n.isGroundConnected&&n.position.y>FLOOR_THICKNESS+.16);if(sim.running&&sim.localFailureCount>0&&!hasSupport&&!movingDebris&&!airborneNodes&&!(sim.explosionEffects||[]).length){sim.running=false;syncButtons();setStatus('TOTAL COLLAPSE: all foundation support paths are lost and debris has settled. Click Reset physics to restore the current design, or Example frame to load a fresh building.',false);setStatus('Collapse complete · simulation paused. The model has no remaining foundation-connected assembly.',true)}else if(sim.running&&!totalCount()&&!sim.debris.length&&!(sim.explosionEffects||[]).length){sim.running=false;syncButtons()}
 }
 function drawGrid(){
@@ -1178,7 +1204,16 @@ function drawWetHighlights(){
  for(const link of sim.memberLinks){const e=link.e;if(e.failed||e.snapped)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const x1=GRID_LEFT+a.position.x/STORY_HEIGHT*DX,y1=GROUND_Y-a.position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+b.position.x/STORY_HEIGHT*DX,y2=GROUND_Y-b.position.y/STORY_HEIGHT*STORY_PX;ctx.beginPath();ctx.moveTo(x1,y1-1.2);ctx.lineTo(x2,y2-1.2);ctx.stroke()}
  ctx.restore();
 }
-function draw(){drawGrid();drawContactShadows();const levelY=l=>screenYLevel(l);const line=(x1,y1,x2,y2,color,width,dash=[])=>{ctx.save();ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore()};
+function drawWindIndicator(){
+ const speed=Math.round(Number(ENVIRONMENT.windSpeed)||0);if(speed<=0)return;
+ const direction=windDirectionSign(),strength=windSpeedRatio();ctx.save();ctx.globalAlpha=.35+.45*strength;ctx.strokeStyle='#8ad9e8';ctx.fillStyle='#a9e7f1';ctx.lineWidth=1.5;ctx.lineCap='round';
+ for(let i=0;i<3;i++){
+  const y=56+i*13,x1=direction>0?W-230+(i%2)*12:W-54-(i%2)*12,x2=direction>0?W-62-(i%2)*12:W-222+(i%2)*12;
+  ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x2,y);ctx.stroke();const tip=x2,sgn=direction>0?1:-1;ctx.beginPath();ctx.moveTo(tip-sgn*7,y-4);ctx.lineTo(tip,y);ctx.lineTo(tip-sgn*7,y+4);ctx.stroke();
+ }
+ ctx.globalAlpha=.92;ctx.font='11px ui-monospace,monospace';ctx.textAlign='right';ctx.fillText(`WIND ${speed} km/h ${direction>0?'→':'←'}`,W-22,36);ctx.restore();
+}
+function draw(){drawGrid();drawContactShadows();drawWindIndicator();const levelY=l=>screenYLevel(l);const line=(x1,y1,x2,y2,color,width,dash=[])=>{ctx.save();ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore()};
  // Diagonal and X-bracing are first-class members with real endpoint connections.
  for(const [key,e]of Object.entries(BuildingMap.braces)){if(e.failed&&e.debrisSpawned)continue;const ep=endpointKeys('braces',e).map(k=>sim.nodes[k]);if(!ep[0]||!ep[1])continue;const x1=GRID_LEFT+ep[0].position.x/STORY_HEIGHT*DX,y1=GROUND_Y-ep[0].position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+ep[1].position.x/STORY_HEIGHT*DX,y2=GROUND_Y-ep[1].position.y/STORY_HEIGHT*STORY_PX;line(x1,y1,x2,y2,'rgba(2,8,16,.88)',8);line(x1,y1,x2,y2,elementColor(e),e.failed?4:3.8,e.failed?[4,3]:[]);if(showSimulationOverlays&&(e.integrity<.82||e.impactStress>.28)&&!e.failed){const mx=(x1+x2)/2,my=(y1+y2)/2;line(mx-3,my-4,mx+2,my+1,'#ff6578',1.5);line(mx+2,my+1,mx-1,my+5,'#ff6578',1.5)}}
  // Beams and slabs are separate map elements; both carry their own utilization and integrity.
@@ -1290,13 +1325,13 @@ async function processPhysicsSteps(){
 function animate(now){
  // Rendering continues on requestAnimationFrame while numerical kernels run asynchronously.
  // Physics retains the fixed 120 Hz step and bounded accumulator, with no overlapping step jobs.
- const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;updateAtmosphericParticles(elapsed);
+ const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;ENVIRONMENT.windTime+=elapsed;updateAtmosphericParticles(elapsed);
  if(sim.running){
   physicsAccumulator=Math.min(physicsAccumulator+elapsed,DT*MAX_PHYSICS_STEPS_PER_FRAME);
   if(!physicsStepBusy)void processPhysicsSteps();
   if(!physicsStepBusy&&(frame++%4)===0){refreshAnalysis();updateMetrics()}
   draw();
- }else physicsAccumulator=0;
+ }else{physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);draw()}}
  requestAnimationFrame(animate);
 }
 
@@ -1316,7 +1351,7 @@ document.addEventListener('keydown',e=>{
  else if(key==='v'){e.preventDefault();validateDesign()}
  else if(e.code==='Space'){e.preventDefault();startOrPause()}
  else if(e.key==='Escape'){dragging=false;lastDragKey='';lastDragPt=null;hover.valid=false;draw()}
-});$('componentType').addEventListener('change',()=>{buildPainted=new Set();updateToolStatus();draw()});$('braceDirection').addEventListener('change',draw);$('loadAmount').addEventListener('input',()=>{$('loadOut').textContent=Number($('loadAmount').value).toFixed(1)});$('explosionPower').addEventListener('input',()=>{$('explosionOut').textContent=$('explosionPower').value;updateToolStatus()});$('applyDimensions').addEventListener('click',()=>configureGridDimensions($('baysInput').value,$('levelsInput').value));$('baysInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('levelsInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('displayMode').addEventListener('change',draw);$('validate').addEventListener('click',validateDesign);$('simulate').addEventListener('click',startOrPause);$('resetPhysics').addEventListener('click',()=>{resetPhysics(true);setStatus('Physics reset. Member integrity and joint motion were restored; the design layout was preserved.',true);setStatus('Physics reset. Run Validate for a fresh written assessment of the restored design.',false)});$('example').addEventListener('click',exampleFrame);$('loadExample').addEventListener('click',loadSelectedExample);$('exampleFrames').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadSelectedExample()}});$('clear').addEventListener('click',clearDesign);$('save').addEventListener('click',saveJSON);$('loadJson').addEventListener('click',()=>$('fileInput').click());$('fileInput').addEventListener('change',e=>{loadJSONFile(e.target.files?.[0]);e.target.value=''});canvas.addEventListener('pointerdown',handleCanvasDown);canvas.addEventListener('pointermove',handlePointerMove);canvas.addEventListener('pointerup',handlePointerUp);canvas.addEventListener('pointercancel',handlePointerUp);canvas.addEventListener('pointerleave',()=>{if(!dragging){hover.valid=false;draw()}});$('loadOut').textContent=Number($('loadAmount').value).toFixed(1);$('explosionOut').textContent=$('explosionPower').value;$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;setMode('build');refreshAll();syncButtons();
+});$('componentType').addEventListener('change',()=>{buildPainted=new Set();updateToolStatus();draw()});$('braceDirection').addEventListener('change',draw);$('loadAmount').addEventListener('input',()=>{$('loadOut').textContent=Number($('loadAmount').value).toFixed(1)});$('explosionPower').addEventListener('input',()=>{$('explosionOut').textContent=$('explosionPower').value;updateToolStatus()});$('applyDimensions').addEventListener('click',()=>configureGridDimensions($('baysInput').value,$('levelsInput').value));$('baysInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('levelsInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('displayMode').addEventListener('change',draw);$('validate').addEventListener('click',validateDesign);$('simulate').addEventListener('click',startOrPause);$('resetPhysics').addEventListener('click',()=>{resetPhysics(true);setStatus('Physics reset. Member integrity and joint motion were restored; the design layout was preserved.',true);setStatus('Physics reset. Run Validate for a fresh written assessment of the restored design.',false)});$('example').addEventListener('click',exampleFrame);$('loadExample').addEventListener('click',loadSelectedExample);$('exampleFrames').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadSelectedExample()}});$('clear').addEventListener('click',clearDesign);$('save').addEventListener('click',saveJSON);$('loadJson').addEventListener('click',()=>$('fileInput').click());$('fileInput').addEventListener('change',e=>{loadJSONFile(e.target.files?.[0]);e.target.value=''});canvas.addEventListener('pointerdown',handleCanvasDown);canvas.addEventListener('pointermove',handlePointerMove);canvas.addEventListener('pointerup',handlePointerUp);canvas.addEventListener('pointercancel',handlePointerUp);canvas.addEventListener('pointerleave',()=>{if(!dragging){hover.valid=false;draw()}});$('loadOut').textContent=Number($('loadAmount').value).toFixed(1);$('explosionOut').textContent=$('explosionPower').value;$('windOut')&&($('windOut').textContent='0 km/h · Calm');$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;setMode('build');refreshAll();syncButtons();
 const cpuWarning=$('cpuWarning'),dismissCpuWarning=$('dismissCpuWarning');
 if(dismissCpuWarning) dismissCpuWarning.addEventListener('click',()=>{if(cpuWarning?.close)cpuWarning.close();else cpuWarning?.removeAttribute('open')});
 // Show on every page load; intentionally do not persist dismissal between visits.
@@ -1348,6 +1383,8 @@ function applyPhysicsComputeMode(){const mode=$('computeMode')?.value||'auto';wi
 $('computeMode')?.addEventListener('change',applyPhysicsComputeMode);
 $('surfaceMoisture')?.addEventListener('input',e=>{ENVIRONMENT.moisture=clamp(Number(e.target.value)/100,0,1);$('moistureOut').textContent=`${Math.round(ENVIRONMENT.moisture*100)}%`;draw()});
 $('waterLevel')?.addEventListener('input',e=>{ENVIRONMENT.waterLevel=clamp(Number(e.target.value)/100,0,1);$('waterOut').textContent=ENVIRONMENT.waterLevel===0?'Dry':`${Math.round(ENVIRONMENT.waterLevel*100)}% height`;draw()});
+$('windSpeed')?.addEventListener('input',e=>{ENVIRONMENT.windSpeed=clamp(Number(e.target.value)||0,0,100);const out=$('windOut');if(out)out.textContent=ENVIRONMENT.windSpeed===0?'0 km/h · Calm':`${Math.round(ENVIRONMENT.windSpeed)} km/h`;refreshAnalysis();draw()});
+$('windDirection')?.addEventListener('change',e=>{ENVIRONMENT.windDirection=Number(e.target.value)<0?-1:1;refreshAnalysis();draw()});
 applyPhysicsComputeMode();
 runPerformanceBenchmark();
 requestAnimationFrame(animate);
