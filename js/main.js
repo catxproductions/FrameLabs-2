@@ -226,7 +226,7 @@ function spawnDustPlume(x,y,intensity=1,sourceVx=0,sourceVy=0){
  const count=Math.round(9+intensity*9),horizontalDrift=clamp(Number(sourceVx)||0,-3.5,3.5)*.12;
  for(let i=0;i<count;i++){
   const spread=(Math.random()*2-1),upward=Math.random(),life=1.25+Math.random()*(.75+intensity*.42);
-  addAtmosphericParticle({kind:'dust',x:x+spread*.055*intensity,y:y+(Math.random()-.5)*.08*intensity,vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity,vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,age:0,life,size:.035+Math.random()*(.055+.025*intensity),growth:.018+Math.random()*.045,opacity:.19+Math.random()*.2,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.45,drift: .12+Math.random()*.38,seed:Math.random()*Math.PI*2,tint:Math.random()});
+  addAtmosphericParticle({kind:'dust',x:x+spread*.09*intensity,y:y+(Math.random()-.5)*.12*intensity,vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity,vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,age:0,life,size:(.035+Math.random()*(.055+.025*intensity))*1.7,growth:.035+Math.random()*.07,opacity:.19+Math.random()*.2,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.45,drift: .12+Math.random()*.38,seed:Math.random()*Math.PI*2,tint:Math.random()});
  }
 }
 function spawnSmokePuff(x,y,sourceVx=0,sourceVy=0,scale=1){
