@@ -225,14 +225,14 @@ function spawnDustPlume(x,y,intensity=1,sourceVx=0,sourceVy=0){
  intensity=clamp(Number(intensity)||1,.2,3.4);
  const count=Math.round(9+intensity*9),horizontalDrift=clamp(Number(sourceVx)||0,-3.5,3.5)*.12;
  for(let i=0;i<count;i++){
-  const spread=(Math.random()*2-1),upward=Math.random(),life=1.25+Math.random()*(.75+intensity*.42);
-  addAtmosphericParticle({kind:'dust',x:x+spread*.09*intensity,y:y+(Math.random()-.5)*.12*intensity,vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity,vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,age:0,life,size:(.035+Math.random()*(.055+.025*intensity))*1.7,growth:.035+Math.random()*.07,opacity:.19+Math.random()*.2,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.45,drift: .12+Math.random()*.38,seed:Math.random()*Math.PI*2,tint:Math.random()});
+  const spread=(Math.random()*2-1),upward=Math.random(),life=6.5+Math.random()*(2.0+intensity*.4);
+  addAtmosphericParticle({kind:'dust',x:x+spread*.055*intensity,y:y+(Math.random()-.5)*.08*intensity,vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity,vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,age:0,life,size:.035+Math.random()*(.055+.025*intensity),growth:.018+Math.random()*.045,opacity:.19+Math.random()*.2,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.45,drift: .12+Math.random()*.38,seed:Math.random()*Math.PI*2,tint:Math.random()});
  }
 }
 function spawnSmokePuff(x,y,sourceVx=0,sourceVy=0,scale=1){
  if(!Number.isFinite(x+y))return;
  scale=clamp(Number(scale)||1,.5,1.8);
- addAtmosphericParticle({kind:'smoke',x:x+(Math.random()-.5)*.035,y,vx:clamp((Number(sourceVx)||0)*.10+(Math.random()-.5)*.22,-.8,.8),vy:.28+Math.random()*.28+Math.max(0,Number(sourceVy)||0)*.04,age:0,life:1.75+Math.random()*1.65,size:.045+Math.random()*.035,growth:.075+Math.random()*.075,opacity:.20+Math.random()*.13,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.22,drift:.13+Math.random()*.27,seed:Math.random()*Math.PI*2,tint:Math.random(),scale});
+ addAtmosphericParticle({kind:'smoke',x:x+(Math.random()-.5)*.035,y,vx:clamp((Number(sourceVx)||0)*.10+(Math.random()-.5)*.22,-.8,.8),vy:.28+Math.random()*.28+Math.max(0,Number(sourceVy)||0)*.04,age:0,life:3.8+Math.random()*2.2,size:.07+Math.random()*.055,growth:.11+Math.random()*.095,opacity:.24+Math.random()*.16,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.22,drift:.13+Math.random()*.27,seed:Math.random()*Math.PI*2,tint:Math.random(),scale});
 }
 function emitFireSmoke(dt){
  const emitBudget=7;let emitted=0;
@@ -261,8 +261,8 @@ function updateAtmosphericParticles(dt){
  for(let i=particles.length-1;i>=0;i--){
   const p=particles[i];p.age+=step;
   if(p.age>=p.life){particles.splice(i,1);continue}
-  const phase=p.seed+p.age*(p.kind==='smoke'?1.25:2.6),rise=p.kind==='smoke'?.19:.035;
-  p.vx+=(Math.sin(phase)*p.drift-(p.vx||0)*(p.kind==='smoke'?.08:.16))*step;
+  const phase=p.seed+p.age*(p.kind==='smoke'?1.65:2.6),rise=p.kind==='smoke'?.27:.035;
+  p.vx+=(Math.sin(phase)*p.drift-(p.vx||0)*(p.kind==='smoke'?.055:.16))*step;
   p.vy+=rise*step;p.x+=p.vx*step;p.y+=p.vy*step;p.size+=p.growth*step;p.rotation+=(p.spin||0)*step;
  }
 }
@@ -270,7 +270,7 @@ function drawAtmosphericParticles(){
  const particles=sim.atmosphericParticles||[];if(!particles.length)return;
  ctx.save();ctx.globalCompositeOperation='source-over';
  for(const p of particles){
-  const life=clamp(1-p.age/p.life,0,1),fadeIn=clamp(p.age/.10,0,1),alpha=(p.opacity||.2)*fadeIn*Math.pow(life,p.kind==='smoke'?.9:1.15),x=GRID_LEFT+p.x/STORY_HEIGHT*DX,y=GROUND_Y-p.y/STORY_HEIGHT*STORY_PX,r=Math.max(1.15,p.size*STORY_PX);
+  const life=clamp(1-p.age/p.life,0,1),fadeIn=clamp(p.age/(p.kind==='smoke'?.22:.10),0,1),alpha=(p.opacity||.2)*fadeIn*Math.pow(life,p.kind==='smoke'?.72:1.15),x=GRID_LEFT+p.x/STORY_HEIGHT*DX,y=GROUND_Y-p.y/STORY_HEIGHT*STORY_PX,r=Math.max(1.15,p.size*STORY_PX*(p.kind==='smoke'?1.22:1));
   if(x<-r*2||x>W+r*2||y<-r*2||y>H+r*2||alpha<.008)continue;
   ctx.globalAlpha=alpha;
   const gradient=ctx.createRadialGradient(x-r*.18,y-r*.18,r*.035,x,y,r);
