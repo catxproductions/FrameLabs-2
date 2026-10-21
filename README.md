@@ -27,6 +27,14 @@ Serve the folder over HTTP/HTTPS (for example, GitHub Pages or `python -m http.s
 - Force assembly, material/environment calculations, structural analysis and load-path propagation, failure/damage rules, and collision/contact decisions remain in the authoritative JavaScript solver on the CPU. The iterative numerical member-constraint pass runs in the CPU worker; body motion integration runs in the CPU worker or WebGPU. This does **not** claim that every structural or collision rule has been ported to WGSL.
 - GPU initialization/dispatch errors degrade to CPU worker and then a main-thread CPU implementation if a worker is unavailable. Worker URLs are resolved relative to the backend script for GitHub Pages subpaths.
 
+## Pre-calculation and replay
+
+- **Pre-calculate** advances the existing authoritative `stepPhysics(DT)` solver ahead of wall-clock time, yields between small batches so the page can update progress, and supports cancellation. The starting simulation state is restored when baking finishes or is cancelled.
+- The bake stores full-state graph snapshots at 0.25-second simulation intervals. Replay offers timeline seeking, play/pause/stop, and 0.25×, 0.5×, 1×, and 2× playback speeds. Seeking restores a recorded checkpoint; it does not integrate intermediate frames between checkpoints.
+- Snapshot cloning preserves object prototypes, cycles, shared references, and typed arrays so structural links continue to reference the cloned members and nodes. An estimated 64 MiB checkpoint budget bounds memory use; very large designs may stop baking early.
+- Replay checks the design layout, environment inputs, quality preset, and compute backend before playback. If those inputs no longer match, bake again. The checkpoints are an in-memory session feature and are not exported in the BuildingMap JSON file.
+- Pre-calculation uses the selected compute backend through the same solver path; it does not create a second physics engine. Replay is a playback of recorded checkpoints, not a validated engineering analysis or a guarantee of bit-for-bit deterministic recomputation.
+
 ## Rendering and modeling limits
 
 FrameLab is a 2D Canvas simulation. Contact shadows, wet highlights, haze and water appearance are Canvas2D approximations; this is not a true 3D screen-space contact-shadow or volumetric-lighting pipeline. The structural engine retains force assembly, load propagation, connectivity, failure and collision response on the CPU; repeated member constraint projections run in the CPU worker, while node/debris integration can run through the CPU worker or WebGPU backend. The new material/environment model and visual deformation improve feedback but are not a validated engineering or finite-element solver. Do not use the simulation for real structural design or safety decisions.
