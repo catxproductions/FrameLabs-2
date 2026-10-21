@@ -261,8 +261,8 @@ function updateAtmosphericParticles(dt){
  for(let i=particles.length-1;i>=0;i--){
   const p=particles[i];p.age+=step;
   if(p.age>=p.life){particles.splice(i,1);continue}
-  const phase=p.seed+p.age*(p.kind==='smoke'?1.65:2.6),rise=p.kind==='smoke'?.27:.035;
-  p.vx+=(Math.sin(phase)*p.drift-(p.vx||0)*(p.kind==='smoke'?.055:.16))*step;
+  const phase=p.seed+p.age*(p.kind==='smoke'?1.25:2.6),rise=p.kind==='smoke'?.19:.035;
+  p.vx+=(Math.sin(phase)*p.drift-(p.vx||0)*(p.kind==='smoke'?.08:.16))*step;
   p.vy+=rise*step;p.x+=p.vx*step;p.y+=p.vy*step;p.size+=p.growth*step;p.rotation+=(p.spin||0)*step;
  }
 }
@@ -270,7 +270,7 @@ function drawAtmosphericParticles(){
  const particles=sim.atmosphericParticles||[];if(!particles.length)return;
  ctx.save();ctx.globalCompositeOperation='source-over';
  for(const p of particles){
-  const life=clamp(1-p.age/p.life,0,1),fadeIn=clamp(p.age/(p.kind==='smoke'?.22:.10),0,1),alpha=(p.opacity||.2)*fadeIn*Math.pow(life,p.kind==='smoke'?.72:1.15),x=GRID_LEFT+p.x/STORY_HEIGHT*DX,y=GROUND_Y-p.y/STORY_HEIGHT*STORY_PX,r=Math.max(1.15,p.size*STORY_PX*(p.kind==='smoke'?1.22:1));
+  const life=clamp(1-p.age/p.life,0,1),fadeIn=clamp(p.age/.10,0,1),alpha=(p.opacity||.2)*fadeIn*Math.pow(life,p.kind==='smoke'?.9:1.15),x=GRID_LEFT+p.x/STORY_HEIGHT*DX,y=GROUND_Y-p.y/STORY_HEIGHT*STORY_PX,r=Math.max(1.15,p.size*STORY_PX);
   if(x<-r*2||x>W+r*2||y<-r*2||y>H+r*2||alpha<.008)continue;
   ctx.globalAlpha=alpha;
   const gradient=ctx.createRadialGradient(x-r*.18,y-r*.18,r*.035,x,y,r);
