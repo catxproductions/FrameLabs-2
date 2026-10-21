@@ -211,8 +211,10 @@ function updateDebrisBounds(d){const hx=(Math.abs(Math.cos(d.angle))*d.length+Ma
 function containDebrisInGrid(d){if(!d)return false;const worldWidth=NX*STORY_HEIGHT,b=updateDebrisBounds(d),halfWidth=(b.right-b.left)*.5;let contacted=false;if(b.left<0){d.x+=-b.left+.002;if(d.vx<0)d.vx=-d.vx*.14;else d.vx*=.78;d.angularVelocity*=.78;contacted=true}else if(b.right>worldWidth){d.x-=b.right-worldWidth+.002;if(d.vx>0)d.vx=-d.vx*.14;else d.vx*=.78;d.angularVelocity*=.78;contacted=true}if(halfWidth*2>=worldWidth){d.x=worldWidth*.5;d.vx*=.1;d.angularVelocity*=.75;contacted=true}if(Math.abs(d.vx)<.035)d.vx=0;updateDebrisBounds(d);return contacted}
 function addAtmosphericParticle(particle){
  if(!sim.atmosphericParticles)sim.atmosphericParticles=[];
- const particles=sim.atmosphericParticles,limit=Math.max(1,MAX_ATMOSPHERIC_PARTICLES||360);
- if(particles.length>=limit){
+ const particles=sim.atmosphericParticles,base=Math.max(1,Number(MAX_ATMOSPHERIC_PARTICLES)||360),fireCount=Math.max(0,Math.floor(Number(sim.fireSmokeSourceCount)||0));
+ // More active fires need more live smoke particles; retain a hard ceiling for browser performance.
+ const limit=Math.max(1,Math.min(1800,base+fireCount*70));
+ while(particles.length>=limit){
   // Prefer retaining fresh, impact-driven dust while trimming the oldest visual-only particles.
   let removeAt=0,oldest=-Infinity;
   for(let i=0;i<particles.length;i++){const ageScore=particles[i].age/(particles[i].life||1)+(particles[i].kind==='dust'?.18:0);if(ageScore>oldest){oldest=ageScore;removeAt=i}}
@@ -226,32 +228,53 @@ function spawnDustPlume(x,y,intensity=1,sourceVx=0,sourceVy=0){
  const count=Math.round(9+intensity*9),horizontalDrift=clamp(Number(sourceVx)||0,-3.5,3.5)*.12;
  for(let i=0;i<count;i++){
   const spread=(Math.random()*2-1),upward=Math.random(),life=6.5+Math.random()*(2.0+intensity*.4);
-  addAtmosphericParticle({kind:'dust',x:x+spread*.055*intensity,y:y+(Math.random()-.5)*.08*intensity,vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity,vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,age:0,life,size:.035+Math.random()*(.055+.025*intensity),growth:.018+Math.random()*.045,opacity:.19+Math.random()*.2,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.45,drift: .12+Math.random()*.38,seed:Math.random()*Math.PI*2,tint:Math.random()});
+  addAtmosphericParticle({kind:'dust',x:x+spread*.055*intensity,y:y+(Math.random()-.5)*.08*intensity,vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity,vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,age:0,life,size:.035+Math.random()*(.055+.025*intensity),growth:.018+Math.random()*.045,opacity:.19+Math.random()*.2,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.45,drift:.12+Math.random()*.38,seed:Math.random()*Math.PI*2,tint:Math.random()});
  }
 }
 function spawnSmokePuff(x,y,sourceVx=0,sourceVy=0,scale=1){
  if(!Number.isFinite(x+y))return;
- scale=clamp(Number(scale)||1,.5,1.8);
- addAtmosphericParticle({kind:'smoke',x:x+(Math.random()-.5)*.035,y,vx:clamp((Number(sourceVx)||0)*.10+(Math.random()-.5)*.22,-.8,.8),vy:.28+Math.random()*.28+Math.max(0,Number(sourceVy)||0)*.04,age:0,life:3.8+Math.random()*2.2,size:.07+Math.random()*.055,growth:.11+Math.random()*.095,opacity:.24+Math.random()*.16,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.22,drift:.13+Math.random()*.27,seed:Math.random()*Math.PI*2,tint:Math.random(),scale});
+ const fireScale=clamp(Number(sim.fireSmokeScale)||1,1,2.8),lifeMultiplier=clamp(1+(fireScale-1)*.5,1,1.9),opacityMultiplier=clamp(1+(fireScale-1)*.14,1,1.25);
+ // Apply the active-fire profile to the stored scale so the renderer can draw truly larger clouds.
+ scale=clamp((Number(scale)||1)*fireScale*1.12,.5,4.2);
+ addAtmosphericParticle({kind:'smoke',x:x+(Math.random()-.5)*.035,y,vx:clamp((Number(sourceVx)||0)*.10+(Math.random()-.5)*.22,-.8,.8),vy:.28+Math.random()*.28+Math.max(0,Number(sourceVy)||0)*.04,age:0,life:(4.2+Math.random()*2.2)*lifeMultiplier,size:.07+Math.random()*.055,growth:.11+Math.random()*.095,opacity:(.25+Math.random()*.17)*opacityMultiplier,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.22,drift:.13+Math.random()*.27,seed:Math.random()*Math.PI*2,tint:Math.random(),scale});
 }
 function emitFireSmoke(dt){
- const emitBudget=7;let emitted=0;
- // Member plumes originate along the burning span, rather than from a fixed screen-space point.
+ const sources=[];
+ // Gather every live fire before emitting, so each plume scales with the full fire rather than whichever sources happen to be visited first.
  for(const link of sim.memberLinks){
   const e=link.e;if(!e.burning||e.failed)continue;
   const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
   e.smokeEmissionClock=(e.smokeEmissionClock||0)+dt;
-  const interval=.105+(e.x%3)*.012;
-  if(e.smokeEmissionClock<interval||emitted>=emitBudget)continue;
-  e.smokeEmissionClock%=interval;const t=.2+Math.random()*.6;
-  spawnSmokePuff(a.position.x+(b.position.x-a.position.x)*t,a.position.y+(b.position.y-a.position.y)*t,a.velocity.x+(b.velocity.x-a.velocity.x)*t,a.velocity.y+(b.velocity.y-a.velocity.y)*t,.8+Math.random()*.45);emitted++;
+  sources.push({kind:'member',e,a,b,baseInterval:.112+(Math.abs(Number(e.x)||0)%3)*.009});
  }
  for(const d of sim.debris){
-  if(!d.burning||emitted>=emitBudget)continue;
+  if(!d.burning)continue;
   d.smokeEmissionClock=(d.smokeEmissionClock||0)+dt;
-  if(d.smokeEmissionClock<.13)continue;
-  d.smokeEmissionClock%=.13;spawnSmokePuff(d.x,d.y+Math.max(.04,d.thickness*.45),d.vx,d.vy,.85+Math.random()*.35);emitted++;
+  sources.push({kind:'debris',e:d,d,baseInterval:.13});
  }
+ const fireCount=sources.length;
+ sim.fireSmokeSourceCount=fireCount;
+ sim.fireSmokeScale=clamp(1+Math.max(0,fireCount-1)*.12,1,2.8);
+ if(!fireCount){sim.smokeEmissionCursor=0;return}
+ const intervalBoost=clamp(1+(sim.fireSmokeScale-1)*.35,1,1.65);
+ const due=[];
+ for(const source of sources){source.interval=source.baseInterval/intervalBoost;if(source.e.smokeEmissionClock>=source.interval)due.push(source)}
+ if(!due.length)return;
+ // Emission capacity increases with active fires, and a rotating cursor prevents early members from starving later ones.
+ const emitBudget=clamp(10+Math.ceil(Math.sqrt(fireCount)*7),10,48),start=Math.floor(Number(sim.smokeEmissionCursor)||0)%due.length,emitCount=Math.min(emitBudget,due.length);
+ const puffsPerSource=sim.fireSmokeScale>=2.35?2:1;
+ for(let i=0;i<emitCount;i++){
+  const source=due[(start+i)%due.length];source.e.smokeEmissionClock%=source.interval;
+  for(let puff=0;puff<puffsPerSource;puff++){
+   if(source.kind==='member'){
+    const t=clamp(.18+Math.random()*.64+(puff?((Math.random()-.5)*.2):0),.06,.94),x=source.a.position.x+(source.b.position.x-source.a.position.x)*t,y=source.a.position.y+(source.b.position.y-source.a.position.y)*t;
+    spawnSmokePuff(x,y,source.a.velocity.x+(source.b.velocity.x-source.a.velocity.x)*t,source.a.velocity.y+(source.b.velocity.y-source.a.velocity.y)*t,.8+Math.random()*.45);
+   }else{
+    const d=source.d;spawnSmokePuff(d.x+(Math.random()-.5)*.06,d.y+Math.max(.04,d.thickness*.45),d.vx,d.vy,.85+Math.random()*.35);
+   }
+  }
+ }
+ sim.smokeEmissionCursor=(start+emitCount)%due.length;
 }
 function updateAtmosphericParticles(dt){
  const step=clamp(Number(dt)||0,0,.05);if(step<=0)return;
@@ -270,7 +293,7 @@ function drawAtmosphericParticles(){
  const particles=sim.atmosphericParticles||[];if(!particles.length)return;
  ctx.save();ctx.globalCompositeOperation='source-over';
  for(const p of particles){
-  const life=clamp(1-p.age/p.life,0,1),fadeIn=clamp(p.age/.10,0,1),alpha=(p.opacity||.2)*fadeIn*Math.pow(life,p.kind==='smoke'?.9:1.15),x=GRID_LEFT+p.x/STORY_HEIGHT*DX,y=GROUND_Y-p.y/STORY_HEIGHT*STORY_PX,r=Math.max(1.15,p.size*STORY_PX);
+  const life=clamp(1-p.age/p.life,0,1),fadeIn=clamp(p.age/.10,0,1),alpha=(p.opacity||.2)*fadeIn*Math.pow(life,p.kind==='smoke'?.9:1.15),x=GRID_LEFT+p.x/STORY_HEIGHT*DX,y=GROUND_Y-p.y/STORY_HEIGHT*STORY_PX,r=Math.max(1.15,p.size*STORY_PX*(p.kind==='smoke'?1.22*(p.scale||1):1));
   if(x<-r*2||x>W+r*2||y<-r*2||y>H+r*2||alpha<.008)continue;
   ctx.globalAlpha=alpha;
   const gradient=ctx.createRadialGradient(x-r*.18,y-r*.18,r*.035,x,y,r);
