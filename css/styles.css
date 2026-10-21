@@ -62,3 +62,11 @@ body.simulation-only canvas{width:100%;height:100%;aspect-ratio:auto;max-height:
 .view-mode-toggle.overlay-toggle{top:60px}
 .environment-note{margin:5px 0 0;color:var(--muted);font-size:10px;line-height:1.4}
 @media(max-width:650px){.view-mode-toggle.overlay-toggle{top:53px}.view-mode-toggle{padding:0 10px;gap:6px}}
+
+/* Pre-calculation and recorded replay controls */
+.replay-tools{grid-column:1/-1;display:grid;grid-template-columns:1fr auto;gap:6px 8px;align-items:center;padding:9px;border:1px solid rgba(105,133,166,.24);border-radius:9px;background:rgba(6,15,27,.32);min-width:0}
+.replay-tools>label{margin:0}.replay-tools progress,.replay-tools input[type=range]{width:100%;min-width:0;grid-column:1/-1}
+.replay-tools progress{height:7px;accent-color:var(--cyan)}.replay-tools .environment-note{grid-column:1/-1;margin:0;min-height:0;font-size:10px;line-height:1.4}
+.replay-buttons{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;align-items:center}.replay-buttons label{margin:0 0 0 auto}.replay-buttons select{width:auto;min-width:76px}
+#precalculate{border-color:rgba(112,231,221,.45)}
+@media(max-width:650px){.replay-tools{grid-template-columns:1fr}.replay-buttons label{margin-left:0}}
