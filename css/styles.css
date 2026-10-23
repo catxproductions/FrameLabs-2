@@ -1241,3 +1241,17 @@ body.simulation-only #scene {
   .effect-subgroup { padding: 10px 12px; }
   .effect-subgroup-title { margin-bottom: 8px; }
 }
+
+
+/* Zero-valued effect sliders read as disabled but stay draggable to turn them back on. */
+.effect-control-disabled label,
+.effect-control-disabled label output { color: #aaa9b7; }
+.effect-control-disabled label output { font-style: italic; letter-spacing: .01em; }
+.effect-control-disabled input[type="range"],
+.effect-control-disabled input[type="range"].is-zero-disabled {
+  filter: grayscale(1);
+  opacity: .48;
+  accent-color: #8d8d99;
+}
+.effect-control-disabled input[type="range"]:hover { opacity: .72; }
+.effect-control-disabled input[type="range"]:focus-visible { opacity: .9; }
