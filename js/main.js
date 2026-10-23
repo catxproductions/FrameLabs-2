@@ -1005,6 +1005,24 @@ function updateMaterialHazards(dt) {
    debris.fuelRemaining = Math.max(0, Number(debris.fuelRemaining ?? 0.5) - dt * 0.08);
    debris.integrity = Math.max(0, Number(debris.integrity ?? 0.5) - dt * 0.075);
 
+   // Detached debris made from a dual-flag material can ignite its own fuse.
+   if (isExplosiveMaterial(debris.material) && !debris.explosiveSpent) {
+    debris.heatExposure = (debris.heatExposure || 0) + dt;
+
+    if (debris.heatExposure >= 0.55) {
+     debris.explosiveSpent = true;
+     debris.reason = 'spent explosive debris';
+     queueMaterialBlastAt(
+      debris.x,
+      debris.y,
+      5.0,
+      'debris:' + debris.id,
+      0,
+      'burning explosive debris'
+     );
+    }
+   }
+
    if (debris.fuelRemaining <= 0) {
     debris.burning = false;
     debris.reason = 'burned-out flammable debris';
