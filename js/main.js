@@ -2083,14 +2083,14 @@ function bindEffectSlider(id,key,outId,minFactor,maxFactor){
 }
 [
  ['fireRealism','fireRealism','fireRealismOut',0,1],
- ['fireDensity','fireDensity','fireDensityOut',0,2],
- ['fireSize','fireSize','fireSizeOut',.5,2],
+ ['fireDensity','fireDensity','fireDensityOut',0,10],
+ ['fireSize','fireSize','fireSizeOut',0,10],
  ['dustRealism','dustRealism','dustRealismOut',0,1],
- ['dustDensity','dustDensity','dustDensityOut',0,2],
- ['dustSize','dustSize','dustSizeOut',.5,2.5],
+ ['dustDensity','dustDensity','dustDensityOut',0,10],
+ ['dustSize','dustSize','dustSizeOut',0,12.5],
  ['smokeRealism','smokeRealism','smokeRealismOut',0,1],
- ['smokeDensity','smokeDensity','smokeDensityOut',0,2],
- ['smokeSize','smokeSize','smokeSizeOut',.5,2.5]
+ ['smokeDensity','smokeDensity','smokeDensityOut',0,10],
+ ['smokeSize','smokeSize','smokeSizeOut',0,12.5]
 ].forEach(([id,key,out,min,max])=>bindEffectSlider(id,key,out,min,max));
 $('surfaceMoisture')?.addEventListener('input',e=>{ENVIRONMENT.moisture=clamp(Number(e.target.value)/100,0,1);$('moistureOut').textContent=`${Math.round(ENVIRONMENT.moisture*100)}%`;draw()});
 $('waterLevel')?.addEventListener('input',e=>{ENVIRONMENT.waterLevel=clamp(Number(e.target.value)/100,0,1);$('waterOut').textContent=ENVIRONMENT.waterLevel===0?'Dry':`${Math.round(ENVIRONMENT.waterLevel*100)}% height`;draw()});
