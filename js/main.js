@@ -41,15 +41,23 @@ const IMPACT_RESISTANCE={steel:{column:1.45,beam:1.32,slab:1.18,brace:1.25},conc
 const MATERIALS={steel:{label:'Steel',column:{mass:.22,capacity:28},beam:{mass:.18,capacity:18},slab:{mass:.32,capacity:15},brace:{mass:.12,capacity:13.5},color:'#78caff'},concrete:{label:'Concrete',column:{mass:.42,capacity:17},beam:{mass:.34,capacity:11},slab:{mass:.65,capacity:8},brace:{mass:.24,capacity:7.2},color:'#b4c0d0'},wood:{label:'Wood',column:{mass:.16,capacity:9},beam:{mass:.14,capacity:6},slab:{mass:.28,capacity:3.8},brace:{mass:.08,capacity:4.1},color:'#dca76a'},flammable:{label:'Flammable composite',column:{mass:.18,capacity:7.6},beam:{mass:.15,capacity:5.4},slab:{mass:.27,capacity:3.1},brace:{mass:.085,capacity:3.7},color:'#f39a52'},explosive:{label:'Explosive composite',column:{mass:.26,capacity:8.8},beam:{mass:.22,capacity:6.4},slab:{mass:.4,capacity:4.6},brace:{mass:.12,capacity:4.8},color:'#ed6ca8'}};
 const MAX_CHAIN_REACTION_DEPTH=3;
 const $=id=>document.getElementById(id),canvas=$('scene'),ctx=canvas.getContext('2d');
-// Render in logical 1100×680 units, but use a high-DPI backing store on retina displays.
-// Capping the pixel ratio at 2 preserves crisp lines without excessive memory on 3× phones.
-let canvasPixelRatio=1;
+// Draw in fixed logical coordinates with a uniform scale. This preserves circles, text,
+// grid spacing, and member proportions on ultrawide and portrait displays alike.
+let canvasPixelRatio=1,canvasViewScale=1,canvasViewOffsetX=0,canvasViewOffsetY=0;
 function setupCanvasScale(){
+ const rect=canvas.getBoundingClientRect();
+ const cssWidth=Math.max(1,rect.width||W),cssHeight=Math.max(1,rect.height||H);
  canvasPixelRatio=Math.min(QUALITY_PROFILE.pixelRatio,Math.max(1,Number(window.devicePixelRatio)||1));
- const backingWidth=Math.round(W*canvasPixelRatio),backingHeight=Math.round(H*canvasPixelRatio);
+ canvasViewScale=Math.min(cssWidth/W,cssHeight/H);
+ canvasViewOffsetX=(cssWidth-W*canvasViewScale)/2;
+ canvasViewOffsetY=(cssHeight-H*canvasViewScale)/2;
+ const backingWidth=Math.max(1,Math.round(cssWidth*canvasPixelRatio));
+ const backingHeight=Math.max(1,Math.round(cssHeight*canvasPixelRatio));
  if(canvas.width!==backingWidth)canvas.width=backingWidth;
  if(canvas.height!==backingHeight)canvas.height=backingHeight;
- ctx.setTransform(canvasPixelRatio,0,0,canvasPixelRatio,0,0);
+ ctx.setTransform(canvasPixelRatio*canvasViewScale,0,0,canvasPixelRatio*canvasViewScale,
+  canvasPixelRatio*canvasViewScale===0?0:canvasPixelRatio*canvasViewOffsetX,
+  canvasPixelRatio*canvasViewOffsetY);
  ctx.imageSmoothingEnabled=true;
 }
 setupCanvasScale();
@@ -610,7 +618,12 @@ function isGridTarget(px,py,kind){
 function snapColumn(px,py){let x=clamp(Math.round((px-GRID_LEFT)/DX),0,NX),story=0,best=Infinity;for(let y=0;y<NY;y++){const d=Math.abs(py-(gridY(y)+gridY(y+1))/2);if(d<best){best=d;story=y}}return{x,y:story}}
 function snapBay(px,py){let x=0,bestX=Infinity;for(let i=0;i<NX;i++){const d=Math.abs(px-(GRID_LEFT+(i+.5)*DX));if(d<bestX){bestX=d;x=i}}let y=1,bestY=Infinity;for(let i=1;i<=NY;i++){const d=Math.abs(py-gridY(i));if(d<bestY){bestY=d;y=i}}return{x,y}}
 function snapBrace(px,py){let x=0,bestX=Infinity;for(let i=0;i<NX;i++){const d=Math.abs(px-(GRID_LEFT+(i+.5)*DX));if(d<bestX){bestX=d;x=i}}const y=clamp(Math.floor((GROUND_Y-py)/STORY_PX),0,NY-1);return{x,y}}
-function canvasCoords(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*(W/r.width),y:(e.clientY-r.top)*(H/r.height)}}
+function canvasCoords(e){
+ const r=canvas.getBoundingClientRect();
+ const scale=Math.max(.0001,Math.min(r.width/W,r.height/H));
+ const offsetX=(r.width-W*scale)/2,offsetY=(r.height-H*scale)/2;
+ return{x:(e.clientX-r.left-offsetX)/scale,y:(e.clientY-r.top-offsetY)/scale};
+}
 function worldCoords(px,py){return{x:(px-GRID_LEFT)/DX*STORY_HEIGHT,y:(GROUND_Y-py)/STORY_PX*STORY_HEIGHT}}
 function waterSurfaceWorld(){return ENVIRONMENT.waterLevel>0?NY*STORY_HEIGHT*ENVIRONMENT.waterLevel:-Infinity}
 function getContactResponse(materialA,materialB,speed=0){return PHYSICS_MODEL?.contactResponse?PHYSICS_MODEL.contactResponse(materialA,materialB,speed,ENVIRONMENT.moisture):{staticFriction:.5,dynamicFriction:.32,restitution:IMPACT_RESTITUTION,elasticity:.45,density:1}}
