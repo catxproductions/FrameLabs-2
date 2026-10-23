@@ -448,9 +448,12 @@ function updateDebrisBounds(d){const hx=(Math.abs(Math.cos(d.angle))*d.length+Ma
 function containDebrisInGrid(d){if(!d)return false;const worldWidth=NX*STORY_HEIGHT,b=updateDebrisBounds(d),halfWidth=(b.right-b.left)*.5;let contacted=false;if(b.left<0){d.x+=-b.left+.002;if(d.vx<0)d.vx=-d.vx*.14;else d.vx*=.78;d.angularVelocity*=.78;contacted=true}else if(b.right>worldWidth){d.x-=b.right-worldWidth+.002;if(d.vx>0)d.vx=-d.vx*.14;else d.vx*=.78;d.angularVelocity*=.78;contacted=true}if(halfWidth*2>=worldWidth){d.x=worldWidth*.5;d.vx*=.1;d.angularVelocity*=.75;contacted=true}if(Math.abs(d.vx)<.035)d.vx=0;updateDebrisBounds(d);return contacted}
 function addAtmosphericParticle(particle){
  if(!sim.atmosphericParticles)sim.atmosphericParticles=[];
- const particles=sim.atmosphericParticles,base=Math.max(1,Number(MAX_ATMOSPHERIC_PARTICLES)||360),fireCount=Math.max(0,Math.floor(Number(sim.fireSmokeSourceCount)||0));
- // More active fires need more live smoke particles; retain a hard ceiling for browser performance.
- const limit=Math.max(1,Math.min(1800,base+fireCount*70));
+ const particles=sim.atmosphericParticles;
+ const qualityBudget=Math.max(1,Number(MAX_ATMOSPHERIC_PARTICLES)||360);
+
+ // Keep a strict per-quality-preset cap. Fire intensity affects puff size and
+ // emission rate, but must never silently raise the memory/performance budget.
+ const limit=Math.min(1800,Math.floor(qualityBudget));
  while(particles.length>=limit){
   // Prefer retaining fresh, impact-driven dust while trimming the oldest visual-only particles.
   let removeAt=0,oldest=-Infinity;
