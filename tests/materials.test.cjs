@@ -217,3 +217,92 @@ test('physics model uses the same shared material library', () => {
   assert.equal(result.staticFriction, 0.7);
   assert.equal(result.dynamicFriction, 0.7);
 });
+
+test('material import restores custom flags, component stats, and impact resistance', () => {
+  const source = loadLibraries().materials;
+  source.addMaterial({
+    id: 'saved-glass',
+    label: 'Saved glass',
+    basedOn: 'concrete',
+    color: '#91e7ff',
+    isExplosive: true,
+    isFlamable: true,
+    heatWeakening: 0,
+    heatSensitivity: 0,
+    column: { mass: 0.22, capacity: 8 },
+    impactResistance: { column: 0.4, beam: 0.34, slab: 0.28, brace: 0.32 }
+  });
+
+  const payload = JSON.parse(JSON.stringify({
+    materialLibrary: source.materials,
+    materialImpactResistance: source.impactResistance
+  }));
+
+  const target = loadLibraries().materials;
+  const importedIds = target.importMaterialLibrary(payload);
+
+  assert.equal(importedIds.join(','), 'saved-glass');
+  assert.equal(target.materials['saved-glass'].isExplosive, true);
+  assert.equal(target.materials['saved-glass'].isFlamable, true);
+  assert.equal(target.materials['saved-glass'].heatWeakening, 0);
+  assert.equal(target.materials['saved-glass'].column.capacity, 8);
+  assert.equal(target.impactResistance['saved-glass'].beam, 0.34);
+});
+
+test('material import does not overwrite built-ins and rejects conflicting custom ids', () => {
+  const library = loadLibraries().materials;
+  library.addMaterial({
+    id: 'local-glass',
+    label: 'Local glass',
+    basedOn: 'concrete',
+    color: '#aabbcc',
+    isExplosive: false,
+    isFlamable: true
+  });
+
+  const matchingPayload = JSON.parse(JSON.stringify({
+    materialLibrary: library.materials,
+    materialImpactResistance: library.impactResistance
+  }));
+  assert.equal(library.importMaterialLibrary(matchingPayload).length, 0);
+  assert.equal(library.materials.steel.label, 'Steel');
+
+  const conflictingPayload = JSON.parse(JSON.stringify(matchingPayload));
+  conflictingPayload.materialLibrary['local-glass'].column.capacity += 2;
+
+  assert.throws(
+    () => library.importMaterialLibrary(conflictingPayload),
+    /already exists with different settings/
+  );
+});
+
+test('material import accepts older exports that omit optional newer properties', () => {
+  const source = loadLibraries().materials;
+  source.addMaterial({
+    id: 'legacy-glass',
+    label: 'Legacy glass',
+    basedOn: 'concrete',
+    color: '#abcdef',
+    isExplosive: false,
+    isFlamable: false
+  });
+
+  const oldPayload = JSON.parse(JSON.stringify({
+    materialLibrary: source.materials
+  }));
+  delete oldPayload.materialLibrary['legacy-glass'].heatWeakening;
+  delete oldPayload.materialLibrary['legacy-glass'].heatSensitivity;
+
+  // The current built-in ids are preserved, and missing newer properties use defaults.
+  const current = loadLibraries().materials;
+  current.addMaterial({
+    id: 'legacy-glass',
+    label: 'Legacy glass',
+    basedOn: 'concrete',
+    color: '#abcdef',
+    isExplosive: false,
+    isFlamable: false
+  });
+
+  assert.equal(current.importMaterialLibrary(oldPayload).length, 0);
+});
