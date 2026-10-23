@@ -131,12 +131,15 @@ test('worker crashes fall back to a main-thread scan instead of leaving a pendin
   assert.match(status.textContent, /Main-thread fallback/);
 });
 
-test('simulation uses fixed 120 Hz physics substeps and exposes an accessible UI visibility toggle', () => {
+test('simulation uses fixed 120 Hz physics substeps and exposes immersive fullscreen controls', () => {
   const html = read('index.html');
   const js = read('js/main.js');
   const css = read('css/styles.css');
   assert.match(html, /id="viewModeToggle"[^>]*aria-pressed="false"/);
-  assert.match(html, /id="viewModeLabel">Hide UI<\/span>/);
+  assert.match(html, /id="viewModeLabel">Fullscreen<\/span>/);
+  assert.match(html, /Enter immersive fullscreen \(F\)/);
+  assert.match(js, /requestFullscreen\(\)/);
+  assert.match(js, /exitFullscreen\(\)/);
   assert.match(html, /id="overlayToggle"/);
   assert.match(html, /id="overlayModeLabel">Icons: On<\/span>/);
   assert.match(html, /id="qualityPreset"/);
@@ -349,6 +352,8 @@ test('collapse dust and fire smoke particles animate in world space and respect 
     MAX_ATMOSPHERIC_PARTICLES: 24,
     QUALITY_PROFILE: { maxParticles: 24 },
     clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
+    windDirectionSign: () => 1,
+    windSpeedRatio: () => 0,
     Math,
     Number,
     globalThis: {}
