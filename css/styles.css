@@ -128,7 +128,7 @@ main.app-shell, main {
   max-height: calc(100vh - 20px);
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 21px 18px 25px;
+  padding: 48px 18px 25px;
   color: #f0eefb;
   border: 1px solid rgba(220, 215, 250, .32);
   border-radius: 2px 2px 4px 92px;
@@ -137,15 +137,6 @@ main.app-shell, main {
   scrollbar-color: #9894bf #514e78;
   scrollbar-width: thin;
 }
-.panel-heading { margin: 0 2px 14px; }
-.panel-heading h2 {
-  color: #e8e4f8;
-  margin: 3px 0 4px;
-  font-size: clamp(23px, 2vw, 34px);
-  line-height: 1.12;
-  font-weight: 400;
-}
-.panel-heading p { margin: 4px 0 0; color: #d0cce9; font-size: 12px; }
 .toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1.28fr) minmax(126px, .72fr);
@@ -519,6 +510,7 @@ body.simulation-only .view-mode-toggle { top: 10px; right: 10px; }
     height: auto;
     min-height: 0;
     max-height: none;
+    padding-top: 18px;
     border-radius: 4px 4px 4px 56px;
   }
   .toolbar {
@@ -530,7 +522,6 @@ body.simulation-only .view-mode-toggle { top: 10px; right: 10px; }
       "environment files"
       "display display";
   }
-  .group-files { grid-row: span 2; }
   .stage { min-height: 420px; border-radius: 38px; }
   .feedback { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .readout { grid-template-columns: repeat(4,minmax(0,1fr)); }
@@ -554,7 +545,6 @@ body.simulation-only .view-mode-toggle { top: 10px; right: 10px; }
       "environment"
       "display";
   }
-  .group-files { grid-row: auto; }
   .group-mode .button-row { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .button-row { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .action-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
