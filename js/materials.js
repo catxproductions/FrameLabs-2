@@ -26,6 +26,13 @@
     return number > 0 ? number : fallback;
   }
 
+  // Unlike positiveOr, this accepts zero. For example, heatWeakening: 0
+  // means the material does not gradually lose integrity from nearby heat.
+  function nonNegativeOr(value, fallback) {
+    const number = numberOr(value, fallback);
+    return number >= 0 ? number : fallback;
+  }
+
   function between(value, fallback, minimum, maximum) {
     return Math.max(minimum, Math.min(maximum, numberOr(value, fallback)));
   }
@@ -40,9 +47,10 @@
    * Add a material to FrameLabs 2.
    *
    * Required: a unique id. Label and color are recommended for the UI.
-   * Optional: basedOn, density/friction/restitution/elasticity values,
-   * column/beam/slab/brace { mass, capacity }, and per-part impact resistance.
-   * Any omitted values are copied from basedOn (concrete by default).
+   * Optional: isExplosive and isFlamable (true/false), basedOn, density,
+   * friction/restitution/elasticity, heatWeakening/heatSensitivity, component stats,
+   * and per-part impactResistance. Omitted settings inherit from basedOn
+   * (concrete by default).
    */
   function addMaterial(options) {
     if (!options || typeof options !== 'object') {
@@ -111,8 +119,8 @@
       elasticity: between(options.elasticity, base ? base.elasticity : 0.4, 0, 2),
 
       // Heat effects: change these per material instead of editing main.js.
-      heatWeakening: positiveOr(options.heatWeakening, base ? base.heatWeakening : 0.004),
-      heatSensitivity: positiveOr(options.heatSensitivity, base ? base.heatSensitivity : 1),
+      heatWeakening: nonNegativeOr(options.heatWeakening, base ? base.heatWeakening : 0.004),
+      heatSensitivity: nonNegativeOr(options.heatSensitivity, base ? base.heatSensitivity : 1),
 
       column: parts.column,
       beam: parts.beam,
