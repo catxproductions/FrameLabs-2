@@ -39,7 +39,7 @@
   /**
    * Add a material to FrameLabs 2.
    *
-   * Required: id, label, color.
+   * Required: a unique id. Label and color are recommended for the UI.
    * Optional: basedOn, density/friction/restitution/elasticity values,
    * column/beam/slab/brace { mass, capacity }, and per-part impact resistance.
    * Any omitted values are copied from basedOn (concrete by default).
