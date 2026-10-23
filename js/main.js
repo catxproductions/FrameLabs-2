@@ -1830,7 +1830,7 @@ function registerImportedMaterials(payload) {
   'explosive'
  ]);
 
- function sameMaterialDefinition(current, saved, savedImpact) {
+ function sameMaterialDefinition(materialId, current, saved, savedImpact) {
   const textProperties = ['label', 'color'];
   const numberProperties = [
    'density',
@@ -1878,7 +1878,7 @@ function registerImportedMaterials(payload) {
     return false;
    }
 
-   if (savedImpact && Number(IMPACT_RESISTANCE[id]?.[kind]) !== Number(savedImpact[kind])) {
+   if (savedImpact && Number(IMPACT_RESISTANCE[materialId]?.[kind]) !== Number(savedImpact[kind])) {
     return false;
    }
   }
@@ -1899,7 +1899,7 @@ function registerImportedMaterials(payload) {
   if (MATERIALS[id]) {
    if (builtInMaterialIds.has(id)) continue;
 
-   if (!sameMaterialDefinition(MATERIALS[id], saved, incomingImpact[id])) {
+   if (!sameMaterialDefinition(id, MATERIALS[id], saved, incomingImpact[id])) {
     throw new Error(
      'Custom material "' + id + '" already exists with different settings. ' +
      'Use a unique id or make its entry in materials.js match the imported design.'
