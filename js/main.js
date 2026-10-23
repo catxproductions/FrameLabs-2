@@ -882,21 +882,156 @@ function applyHeatWeakening(link, intensity = 1) {
  }
  return true;
 }
-function updateMaterialHazards(dt){
- const links=sim.memberLinks.filter(l=>!l.e.failed&&l.e.integrity>.001),byNode=Object.create(null);for(const link of links){(byNode[link.nodeA]||(byNode[link.nodeA]=[])).push(link);(byNode[link.nodeB]||(byNode[link.nodeB]=[])).push(link)}
- const burnQueue=[],detonateQueue=[];
- for(const link of links){const e=link.e;if(!isFlammableMaterial(e.material)||!e.burning)continue;
-  e.burnTime=(e.burnTime||0)+dt;e.thermalDamage=clamp((e.thermalDamage||0)+dt*.025,0,1);e.fuelRemaining=Math.max(0,(Number(e.fuelRemaining??1))-dt*.085);e.integrity=Math.max(0,e.integrity-dt*(.045+(1-e.fuelRemaining)*.075));e.structuralIntegrity=e.integrity;e.impactStress=clamp((e.impactStress||0)+dt*.06,0,5);e.fireSpreadClock=(e.fireSpreadClock||0)+dt;
-  if(e.fireSpreadClock>=.55){e.fireSpreadClock-=.55;for(const nk of [link.nodeA,link.nodeB])for(const neighbor of byNode[nk]||[]){if(neighbor===link||neighbor.e.failed)continue;const joint=neighbor.nodeA===nk?neighbor.connectionA:neighbor.connectionB;if(joint?.broken)continue;const n=neighbor.e;if(!n.burning&&!n.failed)applyHeatWeakening(neighbor,1);if(n.failed)continue;if(isFlammableMaterial(n.material)&&!n.burning){n.heatExposure=(n.heatExposure||0)+.62;if(n.heatExposure>=1.0)burnQueue.push([neighbor,'spread from adjacent fire'])}else if(isExplosiveMaterial(n.material)&&!n.detonated){n.heatExposure=(n.heatExposure||0)+.72;n.explosivePrimed=true;if(n.heatExposure>=.72)detonateQueue.push([neighbor,5.2,'heated by adjacent fire'])}}}
-  if(e.fuelRemaining<=0||e.integrity<=FAILURE_INTEGRITY)burnQueue.push([link,'burned through']);
+function updateMaterialHazards(dt) {
+ const activeLinks = sim.memberLinks.filter(link =>
+  !link.e.failed && link.e.integrity > 0.001
+ );
+ const linksByNode = Object.create(null);
+
+ // Build a quick lookup so fire only checks members connected at its endpoints.
+ for (const link of activeLinks) {
+  (linksByNode[link.nodeA] || (linksByNode[link.nodeA] = [])).push(link);
+  (linksByNode[link.nodeB] || (linksByNode[link.nodeB] = [])).push(link);
  }
- for(const [link,reason] of burnQueue){if(!link.e.failed){if(reason==='burned through')failMember(link,'FLAMMABLE MEMBER BURNED THROUGH');else igniteMember(link,reason)}}
- for(const [link,power,reason] of detonateQueue)if(!link.e.detonated&&!link.e.failed)triggerExplosiveMember(link,power,0,reason);
+
+ const burnQueue = [];
+ const detonateQueue = [];
+
+ for (const link of activeLinks) {
+  const element = link.e;
+
+  // Only a combustible material that is already burning loses fuel this step.
+  if (!isFlammableMaterial(element.material) || !element.burning) continue;
+
+  element.burnTime = (element.burnTime || 0) + dt;
+  element.thermalDamage = clamp((element.thermalDamage || 0) + dt * 0.025, 0, 1);
+  element.fuelRemaining = Math.max(0, Number(element.fuelRemaining ?? 1) - dt * 0.085);
+  element.integrity = Math.max(
+   0,
+   element.integrity - dt * (0.045 + (1 - element.fuelRemaining) * 0.075)
+  );
+  element.structuralIntegrity = element.integrity;
+  element.impactStress = clamp((element.impactStress || 0) + dt * 0.06, 0, 5);
+  element.fireSpreadClock = (element.fireSpreadClock || 0) + dt;
+
+  // A material marked both flammable and explosive develops a fuse while burning.
+  // The threshold is deliberately bounded and uses the existing chain-reaction limits.
+  if (isExplosiveMaterial(element.material) && !element.detonated) {
+   element.heatExposure = (element.heatExposure || 0) + dt;
+   if (element.heatExposure >= 0.55) {
+    element.explosivePrimed = true;
+    detonateQueue.push([link, 5.0, 'heated while burning']);
+   }
+  }
+
+  if (element.fireSpreadClock >= 0.55) {
+   element.fireSpreadClock -= 0.55;
+
+   for (const nodeKey of [link.nodeA, link.nodeB]) {
+    for (const neighbor of linksByNode[nodeKey] || []) {
+     if (neighbor === link || neighbor.e.failed) continue;
+
+     const joint = neighbor.nodeA === nodeKey
+      ? neighbor.connectionA
+      : neighbor.connectionB;
+
+     if (joint?.broken) continue;
+
+     const nextElement = neighbor.e;
+     if (!nextElement.burning && !nextElement.failed) {
+      applyHeatWeakening(neighbor, 1);
+     }
+     if (nextElement.failed) continue;
+
+     // These checks are independent: a custom material can have both flags enabled.
+     if (isFlammableMaterial(nextElement.material) && !nextElement.burning) {
+      nextElement.heatExposure = (nextElement.heatExposure || 0) + 0.62;
+      if (nextElement.heatExposure >= 1.0) {
+       burnQueue.push([neighbor, 'spread from adjacent fire']);
+      }
+     }
+
+     if (isExplosiveMaterial(nextElement.material) && !nextElement.detonated) {
+      nextElement.heatExposure = (nextElement.heatExposure || 0) + 0.72;
+      nextElement.explosivePrimed = true;
+      if (nextElement.heatExposure >= 0.72) {
+       detonateQueue.push([neighbor, 5.2, 'heated by adjacent fire']);
+      }
+     }
+    }
+   }
+  }
+
+  if (element.fuelRemaining <= 0 || element.integrity <= FAILURE_INTEGRITY) {
+   burnQueue.push([link, 'burned through']);
+  }
+ }
+
+ // Queue first, then apply changes. This avoids modifying the list while walking it.
+ for (const [link, reason] of burnQueue) {
+  if (link.e.failed) continue;
+
+  if (reason === 'burned through') {
+   failMember(link, 'FLAMMABLE MEMBER BURNED THROUGH');
+  } else {
+   igniteMember(link, reason);
+  }
+ }
+
+ for (const [link, power, reason] of detonateQueue) {
+  if (!link.e.detonated && !link.e.failed) {
+   triggerExplosiveMember(link, power, 0, reason);
+  }
+ }
+
  // Fire can also reach detached combustible debris. Spent explosive debris cannot re-trigger.
- const burningSources=links.filter(l=>isFlammableMaterial(l.e.material)&&l.e.burning).slice(0,96);
- for(const d of sim.debris){
-  if(isFlammableMaterial(d.material)&&d.burning){d.fuelRemaining=Math.max(0,(Number(d.fuelRemaining??.5))-dt*.08);d.integrity=Math.max(0,(Number(d.integrity??.5))-dt*.075);if(d.fuelRemaining<=0){d.burning=false;d.reason='burned-out flammable debris'} }
-  if(isExplosiveMaterial(d.material)&&!d.explosiveSpent){let heated=false;for(const source of burningSources){const a=sim.nodes[source.nodeA],b=sim.nodes[source.nodeB];if(a&&b&&distanceToWorldSegment(d.x,d.y,a.position,b.position)<STORY_HEIGHT*.34){heated=true;break}}if(heated){d.heatExposure=(d.heatExposure||0)+dt;if(d.heatExposure>.55){d.explosiveSpent=true;d.reason='spent explosive debris';queueMaterialBlastAt(d.x,d.y,5.0,`debris:${d.id}`,0,'heated explosive debris')}}}
+ const burningSources = activeLinks
+  .filter(link => isFlammableMaterial(link.e.material) && link.e.burning)
+  .slice(0, 96);
+
+ for (const debris of sim.debris) {
+  if (isFlammableMaterial(debris.material) && debris.burning) {
+   debris.fuelRemaining = Math.max(0, Number(debris.fuelRemaining ?? 0.5) - dt * 0.08);
+   debris.integrity = Math.max(0, Number(debris.integrity ?? 0.5) - dt * 0.075);
+
+   if (debris.fuelRemaining <= 0) {
+    debris.burning = false;
+    debris.reason = 'burned-out flammable debris';
+   }
+  }
+
+  if (!isExplosiveMaterial(debris.material) || debris.explosiveSpent) continue;
+
+  let heatedByFire = false;
+  for (const source of burningSources) {
+   const nodeA = sim.nodes[source.nodeA];
+   const nodeB = sim.nodes[source.nodeB];
+
+   if (
+    nodeA && nodeB &&
+    distanceToWorldSegment(debris.x, debris.y, nodeA.position, nodeB.position) < STORY_HEIGHT * 0.34
+   ) {
+    heatedByFire = true;
+    break;
+   }
+  }
+
+  if (heatedByFire) {
+   debris.heatExposure = (debris.heatExposure || 0) + dt;
+
+   if (debris.heatExposure > 0.55) {
+    debris.explosiveSpent = true;
+    debris.reason = 'spent explosive debris';
+    queueMaterialBlastAt(
+     debris.x,
+     debris.y,
+     5.0,
+     'debris:' + debris.id,
+     0,
+     'heated explosive debris'
+    );
+   }
+  }
  }
 }
 function detonateAt(px,py){
