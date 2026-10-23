@@ -27,8 +27,8 @@ test('the built-in example payload is valid JSON and contains the four expected 
 
 test('all required local assets exist and the page loads the model before the simulation', () => {
   const html = read('index.html');
-  assert.match(html, /<script src="\.\/js\/compute-backends\.js"><\/script>\s*<script src="\.\/js\/physics-model\.js"><\/script>\s*<script src="\.\/js\/main\.js"><\/script>/);
-  for (const asset of ['css/styles.css', 'js/main.js', 'js/compute-backends.js', 'js/compute-worker.js', 'js/physics-model.js']) {
+  assert.match(html, /<script src="\\.\\/js\\/compute-backends\\.js"><\\/script>\\s*<script src="\\.\\/js\\/materials\\.js"><\\/script>\\s*<script src="\\.\\/js\\/physics-model\\.js"><\\/script>\\s*<script src="\\.\\/js\\/replay-tools\\.js"><\\/script>\\s*<script src="\\.\\/js\\/main\\.js"><\\/script>/);
+  for (const asset of ['css/styles.css', 'js/main.js', 'js/compute-backends.js', 'js/compute-worker.js', 'js/materials.js', 'js/physics-model.js']) {
     assert.ok(fs.statSync(path.join(root, asset)).isFile(), `${asset} exists`);
   }
   const pageURL = 'https://catxproductions.github.io/framelabs/';
