@@ -355,6 +355,7 @@ test('collapse dust and fire smoke particles animate in world space and respect 
     sim: state,
     MAX_ATMOSPHERIC_PARTICLES: 24,
     QUALITY_PROFILE: { maxParticles: 24 },
+    EFFECT_SETTINGS: { fireRealism: 0.8, fireDensity: 1, fireSize: 1, dustRealism: 0.72, dustDensity: 1, dustSize: 1, smokeRealism: 0.78, smokeDensity: 1, smokeSize: 1 },
     clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
     windDirectionSign: () => 1,
     windSpeedRatio: () => 0,
@@ -385,6 +386,34 @@ test('collapse dust and fire smoke particles animate in world space and respect 
   assert.ok(state.atmosphericParticles.length <= 24, 'particle count is capped by the quality budget');
   api.updateAtmosphericParticles(0.05);
   assert.ok(state.atmosphericParticles.every(p => p.age < p.life), 'expired particles are removed instead of accumulating');
+  const beforeDustOff = state.atmosphericParticles.length;
+  context.EFFECT_SETTINGS.dustDensity = 0;
+  api.spawnDustPlume(1, 1, 1);
+  assert.equal(state.atmosphericParticles.length, beforeDustOff, 'zero dust density stops new dust emissions');
+  context.EFFECT_SETTINGS.dustDensity = 1;
+  context.EFFECT_SETTINGS.smokeDensity = 0;
+  const beforeSmokeOff = state.atmosphericParticles.length;
+  api.spawnSmokePuff(1, 2, 0, 0, 1);
+  assert.equal(state.atmosphericParticles.length, beforeSmokeOff, 'zero smoke density stops new smoke emissions');
+});
+
+test('fire, dust, and smoke expose live visual sliders with valid setting bindings', () => {
+  const html = read('index.html');
+  const js = read('js/main.js');
+  for (const id of ['fireRealism','fireDensity','fireSize','dustRealism','dustDensity','dustSize','smokeRealism','smokeDensity','smokeSize']) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*type="range"|type="range"[^>]*id="${id}"`), `${id} is a slider`);
+    assert.match(js, new RegExp(`'${id}','${id}','${id}Out'`), `${id} updates a live setting`);
+  }
+  assert.match(js, /const EFFECT_SETTINGS=\{fireRealism:/);
+  assert.match(js, /const realism=clamp\(Number\(EFFECT_SETTINGS\[p\.kind==='smoke'\?'smokeRealism':'dustRealism'\]\)/);
+});
+
+test('maximum wind applies a direction-aware force to both supported and free structural nodes', () => {
+  const js = read('js/main.js');
+  assert.match(js, /windAx=windDirection\*windRatio\*windRatio\*windGust\*\(\.16\+1\.05\*windHeight\)/);
+  assert.match(js, /-1\.15\*node\.velocity\.x\+windAx/);
+  assert.match(js, /node\.acceleration\.x=-\.22\*node\.velocity\.x\+windAx/);
+  assert.match(js, /speed\*speed\*\(\.18\+1\.05\*level\/Math\.max\(1,NY\)\)\*gust/);
 });
 
 test('collapse and impact events emit dust, burning sources emit smoke, and canvas renders atmospheric particles', () => {
