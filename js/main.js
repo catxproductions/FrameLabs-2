@@ -36,11 +36,29 @@ function updateLateralSway(dt){
  }
  sim.lateralDisp[0]=0;sim.lateralVel[0]=0;
 }
-const IMPACT_RESISTANCE={steel:{column:1.45,beam:1.32,slab:1.18,brace:1.25},concrete:{column:1.12,beam:.96,slab:.84,brace:.86},wood:{column:.72,beam:.62,slab:.54,brace:.52},flammable:{column:.62,beam:.56,slab:.45,brace:.48},explosive:{column:.74,beam:.66,slab:.58,brace:.61}};
-// Flammable and explosive are fictional sandbox materials, not real-world formulations.
-const MATERIALS={steel:{label:'Steel',column:{mass:.22,capacity:28},beam:{mass:.18,capacity:18},slab:{mass:.32,capacity:15},brace:{mass:.12,capacity:13.5},color:'#78caff'},concrete:{label:'Concrete',column:{mass:.42,capacity:17},beam:{mass:.34,capacity:11},slab:{mass:.65,capacity:8},brace:{mass:.24,capacity:7.2},color:'#b4c0d0'},wood:{label:'Wood',column:{mass:.16,capacity:9},beam:{mass:.14,capacity:6},slab:{mass:.28,capacity:3.8},brace:{mass:.08,capacity:4.1},color:'#dca76a'},flammable:{label:'Flammable composite',column:{mass:.18,capacity:7.6},beam:{mass:.15,capacity:5.4},slab:{mass:.27,capacity:3.1},brace:{mass:.085,capacity:3.7},color:'#f39a52'},explosive:{label:'Explosive composite',column:{mass:.26,capacity:8.8},beam:{mass:.22,capacity:6.4},slab:{mass:.4,capacity:4.6},brace:{mass:.12,capacity:4.8},color:'#ed6ca8'}};
+// Material stats and collision resistance live in materials.js, so a new material
+// can be added once and then used by both the construction tools and physics model.
+const MATERIAL_LIBRARY=window.FrameLabMaterials;
+const MATERIALS=MATERIAL_LIBRARY?.materials||Object.create(null);
+const IMPACT_RESISTANCE=MATERIAL_LIBRARY?.impactResistance||Object.create(null);
 const MAX_CHAIN_REACTION_DEPTH=3;
 const $=id=>document.getElementById(id),canvas=$('scene'),ctx=canvas.getContext('2d');
+// Keep the built-in option labels, and automatically add any extra material registered
+// in materials.js. New materials are therefore selectable without editing main.js.
+function populateMaterialDropdown(){
+ const select=$('material');
+ if(!select)return;
+ const existing=new Set(Array.from(select.options,option=>option.value));
+ for(const [id,definition] of Object.entries(MATERIALS)){
+  if(existing.has(id))continue;
+  const option=document.createElement('option');
+  option.value=id;
+  option.textContent=definition.label||id;
+  select.appendChild(option);
+ }
+}
+populateMaterialDropdown();
+window.addEventListener('framelabs:material-added',populateMaterialDropdown);
 // Draw in fixed logical coordinates with a uniform scale. This preserves circles, text,
 // grid spacing, and member proportions on ultrawide and portrait displays alike.
 let canvasPixelRatio=1,canvasViewScale=1,canvasViewOffsetX=0,canvasViewOffsetY=0;
