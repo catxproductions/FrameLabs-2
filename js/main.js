@@ -38,18 +38,23 @@ function updateLateralSway(dt){
 }
 // Material stats and collision resistance live in materials.js, so a new material
 // can be added once and then used by both the construction tools and physics model.
-const MATERIAL_LIBRARY=window.FrameLabMaterials;
-const MATERIALS=MATERIAL_LIBRARY?.materials||Object.create(null);
-const IMPACT_RESISTANCE=MATERIAL_LIBRARY?.impactResistance||Object.create(null);
-
-// Ask the material definition about its capabilities instead of checking its name.
-// This allows new materials to use fire and/or explosive behavior without editing main.js.
-function isFlammableMaterial(materialId){
- const material=MATERIALS[materialId];
- return material?.isFlamable===true || material?.isFlammable===true;
+// materials.js is a required dependency and must load before main.js.
+const MATERIAL_LIBRARY = window.FrameLabMaterials;
+if (!MATERIAL_LIBRARY || !MATERIAL_LIBRARY.materials || !MATERIAL_LIBRARY.impactResistance) {
+ throw new Error('FrameLabs 2: load js/materials.js before js/main.js.');
 }
-function isExplosiveMaterial(materialId){
- return MATERIALS[materialId]?.isExplosive===true;
+
+const MATERIALS = MATERIAL_LIBRARY.materials;
+const IMPACT_RESISTANCE = MATERIAL_LIBRARY.impactResistance;
+
+// Keep these tiny wrappers descriptive at call sites, while sharing the actual
+// capability checks with other scripts through FrameLabMaterials.
+function isFlammableMaterial(materialId) {
+ return MATERIAL_LIBRARY.isFlammable(materialId);
+}
+
+function isExplosiveMaterial(materialId) {
+ return MATERIAL_LIBRARY.isExplosive(materialId);
 }
 const MAX_CHAIN_REACTION_DEPTH=3;
 const $=id=>document.getElementById(id),canvas=$('scene'),ctx=canvas.getContext('2d');
@@ -718,7 +723,7 @@ function refreshAll(){refreshAnalysis();updateMetrics();draw()}
 function updateMetrics(){const a=lastAnalysis||refreshAnalysis();$('utilMetric').textContent=a.maxUtil>=9?'∞':`${Math.round(a.maxUtil*100)}%`;$('utilMetric').style.color=a.maxUtil>=1?'#ff8290':a.maxUtil>=.72?'#ffcf73':'#73dfd1';$('memberMetric').textContent=`${a.memberCount} / ${Object.keys(BuildingMap.loads).length}`;const jointIntegrity=sim.connections.length?sim.connections.filter(c=>!c.broken).length/sim.connections.length:1;const overallIntegrity=.82*a.integrity+.18*jointIntegrity;$('integrityMetric').textContent=`${Math.round(overallIntegrity*100)}%`;$('timeMetric').textContent=`${sim.time.toFixed(1)} s`;$('stateMetric').textContent=sim.running?'Running · node/member physics':'Paused · editable';$('impactMetric').textContent=sim.lastImpactEnergy?sim.lastImpactEnergy.toFixed(2):'—';$('impactSub').textContent=sim.lastImpactEnergy?`${sim.lastImpactOutcome||'IMPACT'} · Level ${sim.lastImpactStory+1} · force ${sim.lastImpactForce.toFixed(1)} units`:'No impact recorded';const stability=sim.stability.primary;if(!stability){$('stabilityMetric').textContent=memberCount()?'NO STABLE ASSEMBLY':'—';$('stabilitySub').textContent=memberCount()?'No intact assembly with a connected foundation support':'Center of mass vs. base supports';$('stabilityMetric').style.color=memberCount()?'#ff8290':'#73dfd1'}else{const dyn=stability.dynamics,angle=Math.abs(dyn.rotation)*180/Math.PI;$('stabilityMetric').textContent=stability.supportPoints.length===0?'UNSUPPORTED':(stability.shouldTip||angle>=18)?`TILT ${angle.toFixed(0)}°`:`${Math.round(stability.stabilityMetric)}%`;$('stabilityMetric').style.color=stability.shouldTip||angle>=18?'#ff8290':stability.stabilityMetric<35?'#ffcf73':'#73dfd1';const margin=stability.supportPoints.length>1?stability.marginWorld/STORY_HEIGHT:Math.abs(stability.comX-(stability.supportPoints[0]?.x??stability.comX))/STORY_HEIGHT;$('stabilitySub').textContent=stability.supportPoints.length?`CoM margin ${stability.outside?'−':''}${Math.abs(margin).toFixed(2)} bays · ${stability.supportPoints.length} support(s) · ${angle.toFixed(1)}° tilt · ${sim.floatingClusters.length} floating cluster(s)`:`No foundation support in this assembly · ${sim.floatingClusters.length} floating cluster(s)`}$('liveDot').classList.toggle('running',sim.running);$('simulate').textContent=sim.running?'Ⅱ Pause':'▶ Simulate';const moving=sim.floors.slice(1).find(f=>f.isFalling||f.velocity.y<-.15);$('caseTitle').textContent=moving?`Independent member motion · level ${moving.level}`:(stability?.shouldTip||Math.abs(stability?.dynamics.rotation||0)>=CRITICAL_TILT)?`Directional instability · ${stability.tippingDirection}`:sim.running?'Sandbox physics running':`${a.count} components · ready`;}
 function setStatus(message,event=false){$(event?'eventInfo':'validationResult').textContent=message}
 function setMode(next){if(next!=='tether')gravityTether=null;mode=next;dragging=false;lastDragKey='';lastDragPt=null;buildLastCell=null;buildPainted=new Set();hover.valid=false;document.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode))});updateToolStatus();draw();}
-function updateToolStatus(){const kind=$('componentType').value;$('braceDirectionWrap').classList.toggle('hidden',kind!=='brace');const label=mode==='build'?`Build · ${$('componentType').selectedOptions[0].text}`:mode==='demolish'?'Destroy · click or drag to delete':mode==='break'?'Break · click or drag a structural member to fracture it':mode==='load'?'Apply load · click a bay to add mass':mode==='push'?'Push · click a level to apply lateral impulse':mode==='ignite'?'Ignite · click flammable or explosive composites':mode==='tether'?'Gravity tether · drag a joint or debris with a damped spring':`Explosion · power ${$('explosionPower').value} · click inside the grid`;$('toolStatus').textContent=label;$('canvasTip').textContent=mode==='build'?'Build: click or drag to draw continuous columns, beams, slabs, diagonal braces, or X-bracing':mode==='demolish'?'Destroy: click or drag to delete; click debris to clear it':mode==='break'?'Break: click or drag a structural member to split it into loose, falling fragments; use Destroy to remove it completely':mode==='load'?'Apply load: click any bay to add mass':mode==='push'?'Push: click a level to push the structure left or right':mode==='ignite'?'Ignite: click a flammable composite to start a fire, or an explosive composite to trigger it':mode==='tether'?'Gravity tether: drag a joint or loose fragment; release to let it swing freely':'Explosion: click anywhere inside the grid to apply a radial blast';canvas.style.cursor=mode==='push'?'ew-resize':mode==='explosion'?'cell':mode==='ignite'?'copy':mode==='tether'?'grab':mode==='break'?'cell':'crosshair'}
+function updateToolStatus(){const kind=$('componentType').value;$('braceDirectionWrap').classList.toggle('hidden',kind!=='brace');const label=mode==='build'?`Build · ${$('componentType').selectedOptions[0].text}`:mode==='demolish'?'Destroy · click or drag to delete':mode==='break'?'Break · click or drag a structural member to fracture it':mode==='load'?'Apply load · click a bay to add mass':mode==='push'?'Push · click a level to apply lateral impulse':mode==='ignite'?'Ignite · use materials with fire/explosive behavior enabled':mode==='tether'?'Gravity tether · drag a joint or debris with a damped spring':`Explosion · power ${$('explosionPower').value} · click inside the grid`;$('toolStatus').textContent=label;$('canvasTip').textContent=mode==='build'?'Build: click or drag to draw continuous columns, beams, slabs, diagonal braces, or X-bracing':mode==='demolish'?'Destroy: click or drag to delete; click debris to clear it':mode==='break'?'Break: click or drag a structural member to split it into loose, falling fragments; use Destroy to remove it completely':mode==='load'?'Apply load: click any bay to add mass':mode==='push'?'Push: click a level to push the structure left or right':mode==='ignite'?'Ignite: click a material with isFlamable or isExplosive enabled':mode==='tether'?'Gravity tether: drag a joint or loose fragment; release to let it swing freely':'Explosion: click anywhere inside the grid to apply a radial blast';canvas.style.cursor=mode==='push'?'ew-resize':mode==='explosion'?'cell':mode==='ignite'?'copy':mode==='tether'?'grab':mode==='break'?'cell':'crosshair'}
 function isGridTarget(px,py,kind){
  if(px<GRID_LEFT-8||px>GRID_RIGHT+8||py<gridY(NY)-8||py>GROUND_Y+10)return false;
  if(kind==='column'){
