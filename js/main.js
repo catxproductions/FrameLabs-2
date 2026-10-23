@@ -539,8 +539,11 @@ function emitFireSmoke(dt){
  sim.fireSmokeScale=clamp(1+Math.max(0,fireCount-1)*.12,1,2.8);
  if(!fireCount||smokeDensity<=0){for(const source of sources)source.e.smokeEmissionClock=0;sim.smokeEmissionCursor=0;return}
  const intervalBoost=clamp(1+(sim.fireSmokeScale-1)*.35,1,1.65);
- const due=[];
- for(const source of sources){
+ const due=[],sourceStart=Math.floor(Number(sim.smokeEmissionCursor)||0)%sources.length;
+ // Start at the next source each frame so the hard high-density emission cap does
+ // not permanently favor the first burning members in a large fire.
+ for(let offset=0;offset<sources.length;offset++){
+  const source=sources[(sourceStart+offset)%sources.length];
   source.interval=source.baseInterval/(intervalBoost*Math.max(.08,smokeDensity));
   const accumulated=Math.max(0,Number(source.e.smokeEmissionClock)||0);
   const available=Math.floor(accumulated/source.interval);
@@ -564,7 +567,7 @@ function emitFireSmoke(dt){
    }
   }
  }
- sim.smokeEmissionCursor=(start+emitCount)%due.length;
+ sim.smokeEmissionCursor=(sourceStart+Math.max(1,emitCount))%sources.length;
 }
 function updateAtmosphericParticles(dt){
  const step=clamp(Number(dt)||0,0,.05);if(step<=0)return;
