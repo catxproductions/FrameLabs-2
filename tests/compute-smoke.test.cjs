@@ -160,7 +160,9 @@ test('simulation uses fixed 120 Hz physics substeps and exposes immersive fullsc
   assert.match(js, /function exitImmersiveFullscreen\(\)/);
   assert.match(js, /document\.addEventListener\('fullscreenchange'/);
   assert.match(css, /body\.simulation-only \.panel/);
-  assert.match(css, /body\.simulation-only canvas\{width:100%;height:100%;aspect-ratio:auto/);
+  assert.match(css, /body\.simulation-only \.stage/);
+  assert.match(css, /body\.simulation-only #scene/);
+  assert.match(css, /object-fit: contain/);
 });
 
 
