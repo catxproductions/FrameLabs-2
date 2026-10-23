@@ -1461,22 +1461,56 @@ if(dismissCpuWarning) dismissCpuWarning.addEventListener('click',()=>{if(cpuWarn
 // Show on every page load; intentionally do not persist dismissal between visits.
 if(cpuWarning){if(typeof cpuWarning.showModal==='function'){try{cpuWarning.showModal()}catch(_){cpuWarning.setAttribute('open','')}}else cpuWarning.setAttribute('open','')}
 const viewModeToggle=$('viewModeToggle'),viewModeLabel=$('viewModeLabel');
+let fullscreenLayoutBefore = false;
 function setSimulationOnly(enabled){
  document.body.classList.toggle('simulation-only',!!enabled);
  viewModeToggle?.setAttribute('aria-pressed',String(!!enabled));
- viewModeToggle?.setAttribute('aria-label',enabled?'Show FrameLabs 2 interface':'Hide interface and show simulation only');
- viewModeToggle?.setAttribute('title',enabled?'Show interface (H)':'Toggle simulation-only view (H)');
- if(viewModeLabel)viewModeLabel.textContent=enabled?'Show UI':'Hide UI';
+ viewModeToggle?.setAttribute('aria-label',enabled?'Exit immersive fullscreen':'Enter immersive fullscreen');
+ viewModeToggle?.setAttribute('title',enabled?'Exit fullscreen (F or Escape)':'Enter immersive fullscreen (F)');
+ if(viewModeLabel)viewModeLabel.textContent=enabled?'Exit fullscreen':'Fullscreen';
  // Refit the canvas backing store after CSS layout changes without changing physics.
  if(typeof setupCanvasScale==='function')setupCanvasScale();
- draw();
+ requestAnimationFrame(()=>{if(typeof setupCanvasScale==='function')setupCanvasScale();draw()});
 }
-viewModeToggle?.addEventListener('click',()=>setSimulationOnly(!document.body.classList.contains('simulation-only')));
+async function enterImmersiveFullscreen(){
+ fullscreenLayoutBefore=document.body.classList.contains('simulation-only');
+ setSimulationOnly(true);
+ try {
+  if(!document.fullscreenElement && document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+ } catch(error) {
+  // Embedded or restricted browsers may deny native fullscreen; keep the immersive layout as a fallback.
+  console.info('Native fullscreen unavailable; using immersive simulation view.',error);
+ }
+}
+async function exitImmersiveFullscreen(){
+ if(document.fullscreenElement && document.exitFullscreen){
+  try { await document.exitFullscreen(); } catch(error) { console.info('Could not exit native fullscreen automatically.',error); }
+ }
+ setSimulationOnly(false);
+}
+viewModeToggle?.addEventListener('click',()=>{
+ if(document.body.classList.contains('simulation-only') || document.fullscreenElement) void exitImmersiveFullscreen();
+ else void enterImmersiveFullscreen();
+});
+function syncFullscreenView(){
+ const active=!!document.fullscreenElement || document.body.classList.contains('simulation-only');
+ viewModeToggle?.setAttribute('aria-pressed',String(active));
+ viewModeToggle?.setAttribute('aria-label',active?'Exit immersive fullscreen':'Enter immersive fullscreen');
+ viewModeToggle?.setAttribute('title',active?'Exit fullscreen (F or Escape)':'Enter immersive fullscreen (F)');
+ if(viewModeLabel)viewModeLabel.textContent=active?'Exit fullscreen':'Fullscreen';
+ requestAnimationFrame(()=>{if(typeof setupCanvasScale==='function')setupCanvasScale();draw()});
+}
+document.addEventListener('fullscreenchange',()=>{
+ if(!document.fullscreenElement && document.body.classList.contains('simulation-only'))setSimulationOnly(false);
+ else syncFullscreenView();
+});
 document.addEventListener('keydown',e=>{
- if(e.code!=='KeyH'||e.repeat||e.altKey||e.ctrlKey||e.metaKey)return;
+ if(e.code!=='KeyF'||e.repeat||e.altKey||e.ctrlKey||e.metaKey)return;
  const target=e.target,tag=(target?.tagName||'').toLowerCase();
  if(target?.isContentEditable||['input','select','textarea','button'].includes(tag))return;
- e.preventDefault();setSimulationOnly(!document.body.classList.contains('simulation-only'));
+ e.preventDefault();
+ if(document.body.classList.contains('simulation-only') || document.fullscreenElement)void exitImmersiveFullscreen();
+ else void enterImmersiveFullscreen();
 });
 const overlayToggle=$('overlayToggle'),overlayModeLabel=$('overlayModeLabel');
 function setSimulationOverlays(enabled){showSimulationOverlays=!!enabled;overlayToggle?.setAttribute('aria-pressed',String(showSimulationOverlays));overlayToggle?.setAttribute('aria-label',showSimulationOverlays?'Hide simulation annotations':'Show simulation annotations');overlayToggle?.setAttribute('title',showSimulationOverlays?'Hide simulation annotations (O)':'Show simulation annotations (O)');if(overlayModeLabel)overlayModeLabel.textContent=showSimulationOverlays?'Icons: On':'Icons: Off';draw()}
