@@ -1205,3 +1205,39 @@ body.simulation-only #scene {
   width: 100%;
   height: 100%;
 }
+
+
+/* Fire / dust / smoke controls share the environment panel and adapt cleanly to touch layouts. */
+.effect-settings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid rgba(220, 216, 250, .19);
+}
+.effect-subgroup {
+  min-width: 0;
+  padding: 9px 8px;
+  border: 1px solid rgba(220, 216, 250, .13);
+  border-radius: 13px;
+  background: rgba(26, 23, 47, .16);
+}
+.effect-subgroup-title {
+  margin: 0 0 10px;
+  color: #f1d7b5;
+  font-size: 13px;
+  font-weight: 600;
+}
+.effect-subgroup .field { margin-bottom: 10px; }
+.effect-subgroup .field:last-child { margin-bottom: 0; }
+.effect-subgroup label { align-items: flex-start; font-size: 11px; line-height: 1.35; }
+.effect-subgroup label output { padding-left: 4px; }
+.effect-subgroup input[type="range"] { margin-top: 6px; accent-color: #ffb36b; }
+.effect-settings-note { margin-top: 9px; }
+
+@media (max-width: 600px) {
+  .effect-settings { grid-template-columns: minmax(0, 1fr); }
+  .effect-subgroup { padding: 10px 12px; }
+  .effect-subgroup-title { margin-bottom: 8px; }
+}
