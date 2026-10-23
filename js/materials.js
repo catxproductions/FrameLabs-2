@@ -84,32 +84,36 @@
     }
 
     const fallbackColor = base ? base.color : '#b4c0d0';
+    const isExplosive = typeof options.isExplosive === 'boolean'
+      ? options.isExplosive
+      : Boolean(base && base.isExplosive);
+    const isFlamable = typeof options.isFlamable === 'boolean'
+      ? options.isFlamable
+      : typeof options.isFlammable === 'boolean'
+        ? options.isFlammable
+        : Boolean(base && base.isFlamable);
+
     const material = Object.freeze({
       label: String(options.label || id),
       color: validColor(options.color, fallbackColor),
 
-      // Gameplay switches. These are independent so a material can have neither,
-      // either one, or both behaviors.
-      isExplosive: typeof options.isExplosive === 'boolean'
-        ? options.isExplosive
-        : Boolean(base && base.isExplosive),
-      // "isFlamable" keeps the exact spelling requested in the game API.
-      // "isFlammable" is also exposed as a correctly-spelled alias.
-      isFlamable: typeof options.isFlamable === 'boolean'
-        ? options.isFlamable
-        : Boolean(base && base.isFlamable),
-      isFlammable: typeof options.isFlamable === 'boolean'
-        ? options.isFlamable
-        : Boolean(base && base.isFlamable),
+      // Gameplay switches are independent: neither, either, or both may be true.
+      isExplosive: isExplosive,
+      isFlamable: isFlamable,
+      isFlammable: isFlamable, // Correct-spelling alias of isFlamable.
 
-      // These properties are used by physics-model.js for contact and motion.
+      // Contact and motion properties read by physics-model.js.
       density: positiveOr(options.density, base ? base.density : 1),
       staticFriction: between(options.staticFriction, base ? base.staticFriction : 0.6, 0.01, 2),
       dynamicFriction: between(options.dynamicFriction, base ? base.dynamicFriction : 0.35, 0.01, 2),
       restitution: between(options.restitution, base ? base.restitution : 0.1, 0, 1),
       wetSensitivity: between(options.wetSensitivity, base ? base.wetSensitivity : 0.4, 0, 1),
       elasticity: between(options.elasticity, base ? base.elasticity : 0.4, 0, 2),
+
+      // Heat effects: change these per material instead of editing main.js.
       heatWeakening: positiveOr(options.heatWeakening, base ? base.heatWeakening : 0.004),
+      heatSensitivity: positiveOr(options.heatSensitivity, base ? base.heatSensitivity : 1),
+
       column: parts.column,
       beam: parts.beam,
       slab: parts.slab,
@@ -144,6 +148,7 @@
     isExplosive: false,
     isFlamable: false,
     heatWeakening: 0.0028,
+    heatSensitivity: .78,
     color: '#78caff',
     density: 7.8,
     staticFriction: 0.50,
@@ -164,6 +169,7 @@
     isExplosive: false,
     isFlamable: false,
     heatWeakening: 0.0045,
+    heatSensitivity: .88,
     color: '#b4c0d0',
     density: 2.35,
     staticFriction: 0.88,
@@ -184,6 +190,7 @@
     isExplosive: false,
     isFlamable: false,
     heatWeakening: 0.009,
+    heatSensitivity: 1.22,
     color: '#dca76a',
     density: 0.68,
     staticFriction: 0.76,
@@ -205,6 +212,7 @@
     isExplosive: false,
     isFlamable: true,
     heatWeakening: 0.0065,
+    heatSensitivity: 1,
     color: '#f39a52',
     density: 0.86,
     staticFriction: 0.63,
@@ -225,6 +233,7 @@
     isExplosive: true,
     isFlamable: false,
     heatWeakening: 0.0055,
+    heatSensitivity: 1,
     color: '#ed6ca8',
     density: 1.12,
     staticFriction: 0.57,
