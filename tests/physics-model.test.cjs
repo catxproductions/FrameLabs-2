@@ -5,11 +5,39 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.resolve(__dirname, '../js/physics-model.js'), 'utf8');
+const materialsSource = fs.readFileSync(path.resolve(__dirname, '../js/materials.js'), 'utf8');
+const physicsSource = fs.readFileSync(path.resolve(__dirname, '../js/physics-model.js'), 'utf8');
+
+function loadLibraries() {
+  class CustomEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.detail = init.detail;
+    }
+  }
+
+  const window = {
+    CustomEvent,
+    dispatchedEvents: [],
+    dispatchEvent(event) {
+      this.dispatchedEvents.push(event);
+      return true;
+    }
+  };
+
+  const context = { window, CustomEvent };
+  vm.runInNewContext(materialsSource, context, { filename: 'materials.js' });
+  vm.runInNewContext(physicsSource, context, { filename: 'physics-model.js' });
+
+  return {
+    window,
+    materials: window.FrameLabMaterials,
+    model: window.FrameLabPhysicsModel
+  };
+}
+
 function loadModel() {
-  const window = {};
-  vm.runInNewContext(source, { window }, { filename: 'physics-model.js' });
-  return window.FrameLabPhysicsModel;
+  return loadLibraries().model;
 }
 
 test('material-pair friction changes smoothly with sliding speed and moisture', () => {
