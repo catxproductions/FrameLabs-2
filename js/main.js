@@ -1141,7 +1141,7 @@ function drawMaterialEffects(){
    const baseCount=clamp(Math.floor(length/25),1,8),count=Math.max(1,Math.min(20,Math.round(baseCount*fireDensity)));
    for(let i=0;i<count;i++){
     const t=(i+.5)/count,x=x1+(x2-x1)*t,y=y1+(y2-y1)*t;
-    const phase=sim.time*(8+fireRealism*5)+i*2.1+e.x*.7;
+    const phase=ENVIRONMENT.windTime*(8+fireRealism*5)+i*2.1+e.x*.7;
     const flicker=.55+.45*Math.abs(Math.sin(phase));
     const h=(5+Math.abs(Math.sin(phase*1.13))*7)*fireSize*(.78+fireRealism*.5);
     const w=(2.4+Math.abs(Math.cos(phase*.87))*1.6)*fireSize*(.85+fireRealism*.22);
@@ -1169,11 +1169,11 @@ function drawMaterialEffects(){
   }
   for(const d of sim.debris){
    if(!d.burning)continue;
-   const x=GRID_LEFT+d.x/STORY_HEIGHT*DX,y=GROUND_Y-d.y/STORY_HEIGHT*STORY_PX,pulse=.6+.4*Math.abs(Math.sin(sim.time*8+d.id));
+   const x=GRID_LEFT+d.x/STORY_HEIGHT*DX,y=GROUND_Y-d.y/STORY_HEIGHT*STORY_PX,pulse=.6+.4*Math.abs(Math.sin(ENVIRONMENT.windTime*8+d.id));
    ctx.save();ctx.globalAlpha=clamp(.45+.16*fireDensity,0,.82);ctx.shadowColor='rgba(255,103,37,.65)';ctx.shadowBlur=4+fireRealism*6;
-   ctx.fillStyle='#ff8542';ctx.beginPath();ctx.ellipse(x,y-4,fireSize*(3+pulse*2),fireSize*(5+pulse*4),Math.sin(sim.time*4+d.id)*.12,0,Math.PI*2);ctx.fill();
+   ctx.fillStyle='#ff8542';ctx.beginPath();ctx.ellipse(x,y-4,fireSize*(3+pulse*2),fireSize*(5+pulse*4),Math.sin(ENVIRONMENT.windTime*4+d.id)*.12,0,Math.PI*2);ctx.fill();
    ctx.shadowBlur=0;ctx.fillStyle='#ffe4a0';ctx.globalAlpha=clamp(.3+fireRealism*.5,0,.85);
-   ctx.beginPath();ctx.ellipse(x+Math.sin(sim.time*7+d.id)*.7,y-4,fireSize*1.1,fireSize*(2+pulse),0,0,Math.PI*2);ctx.fill();ctx.restore();
+   ctx.beginPath();ctx.ellipse(x+Math.sin(ENVIRONMENT.windTime*7+d.id)*.7,y-4,fireSize*1.1,fireSize*(2+pulse),0,0,Math.PI*2);ctx.fill();ctx.restore();
   }
  }
  // Primed explosive elements blink before a heat-triggered chain reaction.
@@ -1978,7 +1978,7 @@ function animate(now){
   if(!physicsStepBusy)void processPhysicsSteps();
   if(!physicsStepBusy&&(frame++%4)===0){refreshAnalysis();updateMetrics()}
   draw();
- }else if(!precalcActive&&!replayTimeline.length){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);for(const node of Object.values(sim.nodes)){if(node.referenceLevel>0&&node.isGroundConnected){const sway=sim.lateralDisp[node.referenceLevel]||0;node.position.x=clamp(node.reference.x+sway,0,NX*STORY_HEIGHT)}}draw()}}
+ }else if(!precalcActive&&!replayTimeline.length){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);for(const node of Object.values(sim.nodes)){if(node.referenceLevel>0&&node.isGroundConnected){const sway=sim.lateralDisp[node.referenceLevel]||0,previousSway=Number(node.windPreviewSway)||0;node.position.x=clamp(node.position.x+sway-previousSway,0,NX*STORY_HEIGHT);node.windPreviewSway=sway}}draw()}}
  requestAnimationFrame(animate);
 }
 
