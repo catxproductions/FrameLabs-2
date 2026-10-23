@@ -74,7 +74,7 @@ copying or changing the fire and explosion functions in `main.js`.
   an id after sharing saved designs that use it.
 - `basedOn` copies unspecified defaults from that material; explicitly supplied settings
   override the inherited settings.
-- `heatWeakening: 0` disables gradual integrity loss from heat. Other heat-related behavior
-  may still apply if a fire or explosive switch is enabled.
+- `heatWeakening: 0` disables gradual integrity loss caused by nearby heat on a member that
+  is not burning. A material that is actively burning still loses integrity as it consumes fuel.
 - All masses, capacities, and physical responses are simplified game values, not engineering
   measurements or real-world structural design data.
