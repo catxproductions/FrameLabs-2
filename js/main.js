@@ -864,8 +864,14 @@ function applyHeatWeakening(link, intensity = 1) {
  const element = link.e;
  const material = MATERIALS[element.material] || {};
  const previousDamage = clamp(Number(element.thermalDamage) || 0, 0, 1);
- const weakeningRate = Math.max(0, Number(material.heatWeakening) || 0.004);
- const heatSensitivity = Math.max(0, Number(material.heatSensitivity) || 1);
+ const configuredRate = Number(material.heatWeakening);
+ const configuredSensitivity = Number(material.heatSensitivity);
+ const weakeningRate = Number.isFinite(configuredRate)
+  ? Math.max(0, configuredRate)
+  : 0.004;
+ const heatSensitivity = Number.isFinite(configuredSensitivity)
+  ? Math.max(0, configuredSensitivity)
+  : 1;
  const amount = weakeningRate
   * clamp(Number(intensity) || 1, 0.1, 1.5)
   * (1 - previousDamage * 0.42);
@@ -1066,7 +1072,86 @@ function drawExplosionEffects(){
   ctx.restore();
  }
 }
-function igniteAt(px,py){const found=nearestElement(px,py);if(!found||found.distance>20||found.group==='loads'||found.group==='debris'){setStatus('Click directly on a flammable or explosive structural member.',true);return false}const link=sim.memberLinks.find(l=>l.id===`${found.group}|${found.key}`);if(!link){setStatus('That component has no active structural connection to ignite.',true);return false}const e=link.e;if(isFlammableMaterial(e.material)){if(!igniteMember(link,'manual ignition tool')){setStatus('That flammable component is already burning or has failed.',true);return false}sim.running=true;syncButtons();setStatus(`Fire started on ${e.kind} at ${found.key}. Nearby connected flammable members may ignite; burning gradually reduces integrity and capacity.`,true);return true}if(isExplosiveMaterial(e.material)){if(triggerExplosiveMember(link,5.2,0,'manual ignition tool')){sim.chainExplosionsProcessed=0;sim.running=true;syncButtons();setStatus(`Explosive composite triggered at ${found.key}. A bounded virtual blast and chain reaction will now propagate through nearby sandbox members.`,true);return true}setStatus('That explosive composite has already detonated or failed; reset physics to restore it.',true);return false}setStatus(`The selected member is ${MATERIALS[e.material]?.label||e.material}; only flammable and explosive composites react to the Ignite tool.`,true);return false}
+function igniteAt(px, py) {
+ const found = nearestElement(px, py);
+
+ if (!found || found.distance > 20 || found.group === 'loads' || found.group === 'debris') {
+  setStatus('Click directly on a flammable or explosive structural member.', true);
+  return false;
+ }
+
+ const link = sim.memberLinks.find(member =>
+  member.id === found.group + '|' + found.key
+ );
+
+ if (!link) {
+  setStatus('That component has no active structural connection to ignite.', true);
+  return false;
+ }
+
+ const element = link.e;
+ const canBurn = isFlammableMaterial(element.material);
+ const canExplode = isExplosiveMaterial(element.material);
+ const materialName = MATERIALS[element.material]?.label || element.material;
+
+ // A material with both flags starts burning first. Its heat fuse can then
+ // trigger the explosive behavior, or the user can ignite it again to trigger it.
+ if (canBurn) {
+  const fireStarted = igniteMember(link, 'manual ignition tool');
+
+  if (!fireStarted) {
+   if (canExplode && element.burning && triggerExplosiveMember(link, 5.2, 0, 'manual ignition tool')) {
+    sim.chainExplosionsProcessed = 0;
+    sim.running = true;
+    syncButtons();
+    setStatus(materialName + ' was triggered while burning. A bounded virtual blast and chain reaction are underway.', true);
+    return true;
+   }
+
+   setStatus('That flammable component is already burning or has failed.', true);
+   return false;
+  }
+
+  sim.running = true;
+  syncButtons();
+
+  const extraMessage = canExplode
+   ? ' It is also explosive, so sustained heat can trigger its virtual blast.'
+   : '';
+
+  setStatus(
+   'Fire started on ' + element.kind + ' at ' + found.key +
+   '. Nearby combustible materials may ignite; burning reduces integrity over time.' +
+   extraMessage,
+   true
+  );
+  return true;
+ }
+
+ if (canExplode) {
+  if (triggerExplosiveMember(link, 5.2, 0, 'manual ignition tool')) {
+   sim.chainExplosionsProcessed = 0;
+   sim.running = true;
+   syncButtons();
+   setStatus(
+    materialName + ' triggered at ' + found.key +
+    '. A bounded virtual blast and chain reaction are underway.',
+    true
+   );
+   return true;
+  }
+
+  setStatus('That explosive material has already detonated or failed; reset physics to restore it.', true);
+  return false;
+ }
+
+ setStatus(
+  materialName + ' has no fire or explosive behavior enabled. ' +
+  'Set isFlamable or isExplosive to true in materials.js to enable one.',
+  true
+ );
+ return false;
+}
 function handleCanvasDown(e){
  e.preventDefault();const p=canvasCoords(e);
  if(mode==='build'){
