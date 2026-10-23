@@ -87,6 +87,21 @@
     const material = Object.freeze({
       label: String(options.label || id),
       color: validColor(options.color, fallbackColor),
+
+      // Gameplay switches. These are independent so a material can have neither,
+      // either one, or both behaviors.
+      isExplosive: typeof options.isExplosive === 'boolean'
+        ? options.isExplosive
+        : Boolean(base && base.isExplosive),
+      // "isFlamable" keeps the exact spelling requested in the game API.
+      // "isFlammable" is also exposed as a correctly-spelled alias.
+      isFlamable: typeof options.isFlamable === 'boolean'
+        ? options.isFlamable
+        : Boolean(base && base.isFlamable),
+      isFlammable: typeof options.isFlamable === 'boolean'
+        ? options.isFlamable
+        : Boolean(base && base.isFlamable),
+
       // These properties are used by physics-model.js for contact and motion.
       density: positiveOr(options.density, base ? base.density : 1),
       staticFriction: between(options.staticFriction, base ? base.staticFriction : 0.6, 0.01, 2),
@@ -94,6 +109,7 @@
       restitution: between(options.restitution, base ? base.restitution : 0.1, 0, 1),
       wetSensitivity: between(options.wetSensitivity, base ? base.wetSensitivity : 0.4, 0, 1),
       elasticity: between(options.elasticity, base ? base.elasticity : 0.4, 0, 2),
+      heatWeakening: positiveOr(options.heatWeakening, base ? base.heatWeakening : 0.004),
       column: parts.column,
       beam: parts.beam,
       slab: parts.slab,
@@ -125,6 +141,9 @@
   addMaterial({
     id: 'steel',
     label: 'Steel',
+    isExplosive: false,
+    isFlamable: false,
+    heatWeakening: 0.0028,
     color: '#78caff',
     density: 7.8,
     staticFriction: 0.50,
@@ -142,6 +161,9 @@
   addMaterial({
     id: 'concrete',
     label: 'Concrete',
+    isExplosive: false,
+    isFlamable: false,
+    heatWeakening: 0.0045,
     color: '#b4c0d0',
     density: 2.35,
     staticFriction: 0.88,
@@ -159,6 +181,9 @@
   addMaterial({
     id: 'wood',
     label: 'Wood',
+    isExplosive: false,
+    isFlamable: false,
+    heatWeakening: 0.009,
     color: '#dca76a',
     density: 0.68,
     staticFriction: 0.76,
@@ -177,6 +202,9 @@
   addMaterial({
     id: 'flammable',
     label: 'Flammable composite',
+    isExplosive: false,
+    isFlamable: true,
+    heatWeakening: 0.0065,
     color: '#f39a52',
     density: 0.86,
     staticFriction: 0.63,
@@ -194,6 +222,9 @@
   addMaterial({
     id: 'explosive',
     label: 'Explosive composite',
+    isExplosive: true,
+    isFlamable: false,
+    heatWeakening: 0.0055,
     color: '#ed6ca8',
     density: 1.12,
     staticFriction: 0.57,
@@ -215,6 +246,8 @@
    * addMaterial({
    *   id: 'glass',
    *   label: 'Glass',
+   *   isExplosive: false,
+   *   isFlamable: false,
    *   basedOn: 'concrete',
    *   color: '#91e7ff',
    *   density: 2.5,
@@ -223,6 +256,7 @@
    *   restitution: 0.12,
    *   wetSensitivity: 0.35,
    *   elasticity: 0.3,
+   *   heatWeakening: 0.008,
    *   column: { mass: 0.22, capacity: 8 },
    *   beam: { mass: 0.18, capacity: 5.5 },
    *   slab: { mass: 0.3, capacity: 4 },
