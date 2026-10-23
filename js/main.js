@@ -1755,8 +1755,111 @@ function syncButtons(){document.querySelectorAll('[data-mode]').forEach(b=>{b.cl
 function startOrPause(){if(precalcActive)return;if(replayPlaying||replayTimeline.length){stopReplayPlayback();replayTimeline=[];updateReplayControls()}if(sim.running){sim.running=false;syncButtons();updateMetrics();return}if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before starting physics.');return}refreshAnalysis();sim.running=true;sim.peakUtil=lastAnalysis.maxUtil;syncButtons();setStatus('Simulation started. Local load redistribution, bending fracture, debris rigid-body motion, swept contact checks, mass-weighted impulses, rotated debris collisions with friction and angular response, material impact resistance, deformation, fragmentation and distance-limited shockwave damage are active.',true);}
 function clearDesign(){if(!confirm('Clear all columns, beams, slabs and loads?'))return;BuildingMap=newBuildingMap();resetPhysics(false);setStatus('Empty design. Place columns, beams and slabs, then choose Validate.',false);setStatus('Design cleared. Build Mode is ready.',true)}
 function exampleFrame(){BuildingMap=newBuildingMap();const supports=[...new Set([Math.round(NX*.16),Math.round(NX*.42),Math.round(NX*.68),Math.round(NX*.92)].map(x=>clamp(x,0,NX)))].sort((a,b)=>a-b),levels=Math.min(4,NY);for(const x of supports)for(let y=0;y<levels;y++)BuildingMap.columns[keyOf(x,y)]=makeElement('column',x,y,'steel');for(let y=1;y<=levels;y++)for(let x=supports[0];x<supports[supports.length-1];x++){BuildingMap.beams[keyOf(x,y)]=makeElement('beam',x,y,'steel');BuildingMap.slabs[keyOf(x,y)]=makeElement('slab',x,y,'concrete')}const midBay=clamp(Math.floor((supports[0]+supports[supports.length-1])*.5),0,NX-1);for(const x of [clamp(midBay-1,0,NX-1),midBay])if(x<NX)BuildingMap.loads[keyOf(x,levels)]={x,y:levels,mass:2,capacity:0,integrity:1,failed:false,kind:'load'};for(const y of [1,Math.min(3,levels-1)])if(y<NY){const x=clamp(midBay-1,0,NX-1);for(const direction of ['up','down']){const k=braceKeyOf(x,y,direction);BuildingMap.braces[k]=makeElement('brace',x,y,'steel');BuildingMap.braces[k].direction=direction}}resetPhysics(true);validateDesign();setStatus(`Example frame loaded for a ${NX}-bay × ${NY}-level grid: ${levels} modeled levels with mixed steel/concrete members and roof loads.`,true)}
-function saveJSON(){const payload={format:'FrameLab BuildingMap',version:1,dimensions:{bays:NX,levels:NY,storyHeight:STORY_HEIGHT},materialLibrary:MATERIALS,BuildingMap};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='framelabs-2-building-design.json';document.body.appendChild(a);a.click();a.remove();window.setTimeout(()=>URL.revokeObjectURL(url),1500);setStatus('Design JSON export created. This file includes the editable design and saved member state, but not a live simulation replay.',true)}
-function loadJSONFile(file){if(!file)return;if(file.size>10*1024*1024){setStatus('JSON import stopped: choose a file smaller than 10 MB.',true);return}const reader=new FileReader();reader.onload=()=>{try{const payload=JSON.parse(String(reader.result));if(payload.format&&payload.format!=='FrameLab BuildingMap')throw new Error('This file is not a FrameLabs 2 BuildingMap export.');const source=payload.BuildingMap||payload.buildingMap;if(!source||typeof source!=='object')throw new Error('No BuildingMap object was found.');if(payload.dimensions&&Number.isFinite(Number(payload.dimensions.bays))&&Number.isFinite(Number(payload.dimensions.levels)))configureGridDimensions(payload.dimensions.bays,payload.dimensions.levels,{silent:true});const next=newBuildingMap();for(const group of ['columns','beams','slabs','braces']){const input=source[group]||{};for(const [key,raw]of Object.entries(input)){const x=Number(raw.x),y=Number(raw.y),kind=group.slice(0,-1),mat=String(raw.material||'steel'),minY=kind==='column'||kind==='brace'?0:1,maxY=kind==='column'||kind==='brace'?NY-1:NY,maxX=kind==='column'?NX:NX-1;if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||x>maxX||y<minY||y>maxY||!MATERIALS[mat]||!MATERIALS[mat][kind])continue;const e=makeElement(kind,x,y,mat);if(kind==='brace')e.direction=raw.direction==='down'?'down':'up';e.mass=clamp(Number(raw.mass)||e.mass,.01,1000);e.capacity=clamp(Number(raw.capacity)||e.capacity,.01,10000);e.yieldStrength=e.capacity;e.momentCapacity=kind==='beam'?clamp(Number(raw.momentCapacity)||e.capacity*.50,.01,100000):0;e.integrity=clamp(Number(raw.integrity??1),0,1);e.failed=Boolean(raw.failed)||e.integrity<=0;e.snapped=Boolean(raw.snapped)&&!e.failed;e.snapSag=clamp(Number(raw.snapSag)||0,0,STORY_HEIGHT*.7);e.snapVelocity=clamp(Number(raw.snapVelocity)||0,0,3.2);e.snapCenterX=raw.snapCenterX!=null&&Number.isFinite(Number(raw.snapCenterX))?Number(raw.snapCenterX):null;e.snapLeft=Number.isFinite(Number(raw.snapLeft))?Number(raw.snapLeft):null;e.snapRight=Number.isFinite(Number(raw.snapRight))?Number(raw.snapRight):null;e.momentOverloadTime=clamp(Number(raw.momentOverloadTime)||0,0,10);e.sag=clamp(Number(raw.sag)||0,0,STORY_HEIGHT*.38);e.sagVelocity=clamp(Number(raw.sagVelocity)||0,-1.1,1.7);e.plasticSag=clamp(Number(raw.plasticSag)||0,0,STORY_HEIGHT*.30);e.sagging=Boolean(raw.sagging);e.catenaryTension=clamp(Number(raw.catenaryTension)||0,0,10000);e.catenaryRatio=clamp(Number(raw.catenaryRatio)||0,0,3.2);e.jointDamageA=clamp(Number(raw.jointDamageA)||0,0,1.25);e.jointDamageB=clamp(Number(raw.jointDamageB)||0,0,1.25);e.plasticMoment=clamp(Number(raw.plasticMoment)||0,0,3);e.impactResistance=clamp(Number(raw.impactResistance)||e.impactResistance,.1,4);e.durability=clamp(Number(raw.durability)||e.capacity*e.impactResistance*IMPACT_ENERGY_PER_CAPACITY,.1,100000);e.shattered=Boolean(raw.shattered);e.impactDamage=clamp(Number(raw.impactDamage)||0,0,.98);e.impactDeformation=clamp(Number(raw.impactDeformation)||0,0,1.5);e.plasticDeformation=clamp(Number(raw.plasticDeformation??e.impactDeformation)||0,0,1.5);e.elasticDeformation=clamp(Number(raw.elasticDeformation)||0,0,1.5);e.impactDeformation=clamp(e.plasticDeformation+e.elasticDeformation,0,1.5);e.impactStress=clamp(Number(raw.impactStress)||0,0,5);e.lastImpactEnergy=clamp(Number(raw.lastImpactEnergy)||0,0,1e9);e.burning=Boolean(raw.burning)&&isFlammableMaterial(mat)&&!e.failed;const importedFuel=Number(raw.fuelRemaining??(isFlammableMaterial(mat)?1:0));e.fuelRemaining=clamp(Number.isFinite(importedFuel)?importedFuel:(isFlammableMaterial(mat)?1:0),0,1);e.heatExposure=clamp(Number(raw.heatExposure)||0,0,10);e.thermalDamage=clamp(Number(raw.thermalDamage)||0,0,1);e.fireSpreadClock=clamp(Number(raw.fireSpreadClock)||0,0,2);e.burnTime=clamp(Number(raw.burnTime)||0,0,10000);e.ignitionReason=String(raw.ignitionReason||'');e.explosivePrimed=Boolean(raw.explosivePrimed)&&isExplosiveMaterial(mat)&&!e.failed;e.detonated=Boolean(raw.detonated);e.chainDepth=clamp(Number(raw.chainDepth)||0,0,MAX_CHAIN_REACTION_DEPTH);e.state=e.failed?(e.shattered?'SHATTERED':'FAILED'):e.snapped?'SNAPPED':'intact';next[group][group==='braces'?braceKeyOf(x,y,e.direction):keyOf(x,y)]=e}}for(const [key,raw]of Object.entries(source.loads||{})){const x=Number(raw.x),y=Number(raw.y);if(Number.isInteger(x)&&Number.isInteger(y)&&x>=0&&x<NX&&y>=1&&y<=NY)next.loads[keyOf(x,y)]={x,y,mass:clamp(Number(raw.mass)||2,.01,100),capacity:0,integrity:clamp(Number(raw.integrity??1),0,1),failed:Boolean(raw.failed),kind:'load'}}BuildingMap=next;resetPhysics(false);for(const link of [...sim.memberLinks])if(link.e.failed&&!link.e.debrisSpawned)spawnMemberDebris(link,'loaded failed member');refreshAnalysis();draw();setStatus(`Loaded ${totalCount()} saved elements from ${file.name}; ${sim.debris.length} failed member(s) restored as debris.`,true);setStatus('Design imported. Live estimates refreshed; select Validate for a written structural check.',false)}catch(err){setStatus(`Could not load JSON: ${err.message}`)}};reader.readAsText(file)}
+function saveJSON() {
+ const payload = {
+  format: 'FrameLab BuildingMap',
+  version: 1,
+  dimensions: {
+   bays: NX,
+   levels: NY,
+   storyHeight: STORY_HEIGHT
+  },
+  // Save the effective material settings and their separate impact-resistance table.
+  // A design created with custom materials can now be reopened without editing source.
+  materialLibrary: MATERIALS,
+  materialImpactResistance: IMPACT_RESISTANCE,
+  BuildingMap
+ };
+
+ const blob = new Blob([JSON.stringify(payload, null, 2)], {
+  type: 'application/json'
+ });
+ const url = URL.createObjectURL(blob);
+ const link = document.createElement('a');
+
+ link.href = url;
+ link.download = 'framelabs-2-building-design.json';
+ document.body.appendChild(link);
+ link.click();
+ link.remove();
+ window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+ setStatus(
+  'Design JSON export created with structural state and material definitions. ' +
+  'A live simulation replay is not included.',
+  true
+ );
+}
+
+function registerImportedMaterials(payload) {
+ const incomingMaterials = payload.materialLibrary;
+ if (!incomingMaterials || typeof incomingMaterials !== 'object' || Array.isArray(incomingMaterials)) {
+  return [];
+ }
+
+ const incomingImpact = payload.materialImpactResistance &&
+  typeof payload.materialImpactResistance === 'object'
+  ? payload.materialImpactResistance
+  : {};
+ const pendingMaterials = [];
+
+ // Validate and prepare the entire list first, before adding anything to the game.
+ for (const [id, saved] of Object.entries(incomingMaterials)) {
+  // Never let a design overwrite definitions already trusted by the current game.
+  if (MATERIALS[id]) continue;
+
+  if (!/^[a-z][a-z0-9_-]*$/.test(id)) {
+   throw new Error('The design contains an invalid custom material id: "' + id + '".');
+  }
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+   throw new Error('The saved settings for material "' + id + '" are invalid.');
+  }
+  if (pendingMaterials.length >= 100) {
+   throw new Error('This design contains too many custom materials (limit: 100).');
+  }
+
+  const options = {
+   id,
+   label: typeof saved.label === 'string' ? saved.label.slice(0, 100) : id,
+   color: saved.color,
+   basedOn: 'concrete',
+
+   // Only actual booleans are accepted. Missing switches default to false on import.
+   isExplosive: typeof saved.isExplosive === 'boolean' ? saved.isExplosive : false,
+   isFlamable: typeof saved.isFlamable === 'boolean'
+    ? saved.isFlamable
+    : typeof saved.isFlammable === 'boolean'
+     ? saved.isFlammable
+     : false,
+
+   density: saved.density,
+   staticFriction: saved.staticFriction,
+   dynamicFriction: saved.dynamicFriction,
+   restitution: saved.restitution,
+   wetSensitivity: saved.wetSensitivity,
+   elasticity: saved.elasticity,
+   heatWeakening: saved.heatWeakening,
+   heatSensitivity: saved.heatSensitivity,
+
+   column: saved.column,
+   beam: saved.beam,
+   slab: saved.slab,
+   brace: saved.brace,
+   impactResistance: incomingImpact[id]
+  };
+
+  pendingMaterials.push(options);
+ }
+
+ const registeredIds = [];
+ for (const options of pendingMaterials) {
+  MATERIAL_LIBRARY.addMaterial(options);
+  registeredIds.push(options.id);
+ }
+
+ return registeredIds;
+}
+function loadJSONFile(file){if(!file)return;if(file.size>10*1024*1024){setStatus('JSON import stopped: choose a file smaller than 10 MB.',true);return}const reader=new FileReader();reader.onload=()=>{try{const payload=JSON.parse(String(reader.result));if(payload.format&&payload.format!=='FrameLab BuildingMap')throw new Error('This file is not a FrameLabs 2 BuildingMap export.');const source=payload.BuildingMap||payload.buildingMap;if(!source||typeof source!=='object')throw new Error('No BuildingMap object was found.');const importedMaterials=registerImportedMaterials(payload);if(payload.dimensions&&Number.isFinite(Number(payload.dimensions.bays))&&Number.isFinite(Number(payload.dimensions.levels)))configureGridDimensions(payload.dimensions.bays,payload.dimensions.levels,{silent:true});const next=newBuildingMap();for(const group of ['columns','beams','slabs','braces']){const input=source[group]||{};for(const [key,raw]of Object.entries(input)){const x=Number(raw.x),y=Number(raw.y),kind=group.slice(0,-1),mat=String(raw.material||'steel'),minY=kind==='column'||kind==='brace'?0:1,maxY=kind==='column'||kind==='brace'?NY-1:NY,maxX=kind==='column'?NX:NX-1;if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||x>maxX||y<minY||y>maxY||!MATERIALS[mat]||!MATERIALS[mat][kind])continue;const e=makeElement(kind,x,y,mat);if(kind==='brace')e.direction=raw.direction==='down'?'down':'up';e.mass=clamp(Number(raw.mass)||e.mass,.01,1000);e.capacity=clamp(Number(raw.capacity)||e.capacity,.01,10000);e.yieldStrength=e.capacity;e.momentCapacity=kind==='beam'?clamp(Number(raw.momentCapacity)||e.capacity*.50,.01,100000):0;e.integrity=clamp(Number(raw.integrity??1),0,1);e.failed=Boolean(raw.failed)||e.integrity<=0;e.snapped=Boolean(raw.snapped)&&!e.failed;e.snapSag=clamp(Number(raw.snapSag)||0,0,STORY_HEIGHT*.7);e.snapVelocity=clamp(Number(raw.snapVelocity)||0,0,3.2);e.snapCenterX=raw.snapCenterX!=null&&Number.isFinite(Number(raw.snapCenterX))?Number(raw.snapCenterX):null;e.snapLeft=Number.isFinite(Number(raw.snapLeft))?Number(raw.snapLeft):null;e.snapRight=Number.isFinite(Number(raw.snapRight))?Number(raw.snapRight):null;e.momentOverloadTime=clamp(Number(raw.momentOverloadTime)||0,0,10);e.sag=clamp(Number(raw.sag)||0,0,STORY_HEIGHT*.38);e.sagVelocity=clamp(Number(raw.sagVelocity)||0,-1.1,1.7);e.plasticSag=clamp(Number(raw.plasticSag)||0,0,STORY_HEIGHT*.30);e.sagging=Boolean(raw.sagging);e.catenaryTension=clamp(Number(raw.catenaryTension)||0,0,10000);e.catenaryRatio=clamp(Number(raw.catenaryRatio)||0,0,3.2);e.jointDamageA=clamp(Number(raw.jointDamageA)||0,0,1.25);e.jointDamageB=clamp(Number(raw.jointDamageB)||0,0,1.25);e.plasticMoment=clamp(Number(raw.plasticMoment)||0,0,3);e.impactResistance=clamp(Number(raw.impactResistance)||e.impactResistance,.1,4);e.durability=clamp(Number(raw.durability)||e.capacity*e.impactResistance*IMPACT_ENERGY_PER_CAPACITY,.1,100000);e.shattered=Boolean(raw.shattered);e.impactDamage=clamp(Number(raw.impactDamage)||0,0,.98);e.impactDeformation=clamp(Number(raw.impactDeformation)||0,0,1.5);e.plasticDeformation=clamp(Number(raw.plasticDeformation??e.impactDeformation)||0,0,1.5);e.elasticDeformation=clamp(Number(raw.elasticDeformation)||0,0,1.5);e.impactDeformation=clamp(e.plasticDeformation+e.elasticDeformation,0,1.5);e.impactStress=clamp(Number(raw.impactStress)||0,0,5);e.lastImpactEnergy=clamp(Number(raw.lastImpactEnergy)||0,0,1e9);e.burning=Boolean(raw.burning)&&isFlammableMaterial(mat)&&!e.failed;const importedFuel=Number(raw.fuelRemaining??(isFlammableMaterial(mat)?1:0));e.fuelRemaining=clamp(Number.isFinite(importedFuel)?importedFuel:(isFlammableMaterial(mat)?1:0),0,1);e.heatExposure=clamp(Number(raw.heatExposure)||0,0,10);e.thermalDamage=clamp(Number(raw.thermalDamage)||0,0,1);e.fireSpreadClock=clamp(Number(raw.fireSpreadClock)||0,0,2);e.burnTime=clamp(Number(raw.burnTime)||0,0,10000);e.ignitionReason=String(raw.ignitionReason||'');e.explosivePrimed=Boolean(raw.explosivePrimed)&&isExplosiveMaterial(mat)&&!e.failed;e.detonated=Boolean(raw.detonated);e.chainDepth=clamp(Number(raw.chainDepth)||0,0,MAX_CHAIN_REACTION_DEPTH);e.state=e.failed?(e.shattered?'SHATTERED':'FAILED'):e.snapped?'SNAPPED':'intact';next[group][group==='braces'?braceKeyOf(x,y,e.direction):keyOf(x,y)]=e}}for(const [key,raw]of Object.entries(source.loads||{})){const x=Number(raw.x),y=Number(raw.y);if(Number.isInteger(x)&&Number.isInteger(y)&&x>=0&&x<NX&&y>=1&&y<=NY)next.loads[keyOf(x,y)]={x,y,mass:clamp(Number(raw.mass)||2,.01,100),capacity:0,integrity:clamp(Number(raw.integrity??1),0,1),failed:Boolean(raw.failed),kind:'load'}}BuildingMap=next;resetPhysics(false);for(const link of [...sim.memberLinks])if(link.e.failed&&!link.e.debrisSpawned)spawnMemberDebris(link,'loaded failed member');refreshAnalysis();draw();setStatus(`Loaded ${totalCount()} saved elements from ${file.name}; ${sim.debris.length} failed member(s) restored as debris.`,true);if(importedMaterials.length)setStatus(`Imported ${importedMaterials.length} custom material definition(s): ${importedMaterials.join(', ')}.`,true);setStatus('Design imported. Live estimates refreshed; select Validate for a written structural check.',false)}catch(err){setStatus(`Could not load JSON: ${err.message}`)}};reader.readAsText(file)}
 let builtinExamplesCache=null;
 const BUILTIN_MATERIAL_CODES={s:'steel',c:'concrete',w:'wood',f:'flammable',e:'explosive'};
 function getBuiltinExamples(){if(!builtinExamplesCache){const node=$('builtinExamplesData');builtinExamplesCache=JSON.parse(node?node.textContent:'{}')}return builtinExamplesCache}
