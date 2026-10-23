@@ -200,6 +200,7 @@
  <div class="canvas-wrap"><canvas id="scene" width="1100" height="680" aria-label="Editable structural grid. Build, remove, load, push, ignite fictional reactive materials, or trigger a virtual radial blast. Keyboard shortcuts are listed below the canvas." tabindex="0" aria-describedby="canvasTip"></canvas><div class="canvas-tip" id="canvasTip">Build: columns on vertical segments; beams and slabs on horizontal segments</div></div>
  <div class="legend"><span>LOW</span><span class="gradient" aria-hidden="true"></span><span>HIGH / FAILED</span><span class="legend-spacer"></span><span>Blue → green → yellow → red = increasing utilization</span></div>
 </section>
+<div class="left-insights" aria-label="Simulation information and status">
 <section class="readout" aria-label="Live simulation metrics">
  <div class="metric"><div class="metric-title">Peak utilization</div><div class="metric-value" id="utilMetric">—</div><div class="metric-sub">estimated demand / remaining capacity</div></div>
  <div class="metric"><div class="metric-title">Members / loads</div><div class="metric-value" id="memberMetric">0 / 0</div><div class="metric-sub">columns, beams, slabs, diagonal bracing and added loads</div></div>
@@ -212,6 +213,7 @@
 <section class="feedback" aria-live="polite"><div><h2>Structural verification</h2><p id="validationResult" class="result">Empty design. Build a frame, then choose Validate.</p></div><div><h2>Simulation events</h2><p id="eventInfo">Build Mode is ready. The grid is empty; the physics engine reads the editable BuildingMap.</p></div></section>
 <aside class="notice"><span class="notice-icon" aria-hidden="true">ⓘ</span><div><strong>Interpretation:</strong> This is a qualitative, reduced-order teaching model. Material capacities, contact friction, debris fragmentation, impact resistance, kinetic-energy transfer, impulse, fracture thresholds, deformation and shockwave propagation use illustrative units, not calibrated real-world properties or engineering calculations. The model now approximates pre-failure beam sag, catenary tension, angle-dependent joint shear, plastic joint yielding, short frictional anchoring, and damped separation, but does not validate actual building safety.</div></aside>
 <div class="explain">Tips: Resize the grid up to 600 bays × 300 levels. Very large grids can be difficult to edit visually and may run slowly. Click and drag to paint continuous lines of columns, beams, slabs, diagonal braces, or X-bracing. Build continuous columns from the foundation, connect them with beams, add slabs, then select Validate. Apply loads to individual bays and use the heatmap to inspect weak points. Explosion applies a virtual radial impulse with distance-based damage; power is adjustable. Ignite starts a fictional fire on flammable composites or triggers explosive composites. Nearby connected members gradually lose integrity under heat; wood weakens faster than steel or concrete. Fire spreads through connected flammable members and burns them down over time. Destroy removes a member immediately; Break fractures a selected member into loose pieces that can fall and collide. Save JSON exports the design and member damage state (not a live replay). Keyboard shortcuts: B build · D destroy · K break · L load · P push · E explosion · I ignite · T gravity tether · V validate · Space simulate/pause · H hide UI · O toggle annotations. Members fracture into two separate half-length debris pieces when they fail.<br><span style="display:inline-block;margin-top:5px;color:#6f849e">FrameLabs 2 · Educational simulation · Runs locally in your browser</span></div>
+</div>
 </main>
 <dialog id="cpuWarning" class="performance-dialog" aria-labelledby="cpuWarningTitle" aria-describedby="cpuWarningDescription">
  <div class="performance-content">
@@ -230,4 +232,5 @@
 <script src="./js/main.js"></script>
 </body>
 </html>
+
 
