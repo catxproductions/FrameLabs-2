@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0a1220">
+<meta name="theme-color" content="#171423">
 <meta name="description" content="Build custom structural frames of adjustable size and explore load paths, member failure, fictional flammable and explosive materials, radial blasts, and progressive collapse in FrameLabs 2.">
 <meta name="color-scheme" content="dark">
 <meta name="application-name" content="FrameLabs 2">
@@ -27,22 +27,173 @@
 <button type="button" id="viewModeToggle" class="view-mode-toggle" aria-pressed="false" aria-label="Hide interface and show simulation only" title="Toggle simulation-only view (H)"><span aria-hidden="true">◉</span><span id="viewModeLabel">Hide UI</span></button>
 <button type="button" id="overlayToggle" class="view-mode-toggle overlay-toggle" aria-pressed="true" aria-label="Hide simulation annotations" title="Toggle simulation annotations (O)"><span aria-hidden="true">✦</span><span id="overlayModeLabel">Icons: On</span></button>
 <main>
-<header class="topline"><div class="brand"><img class="brand-logo" id="brandLogo" src="https://cdn.phototourl.com/member/2026-10-16-d0d23b41-c667-4d19-8962-a846c54e71a5.png" alt="FrameLabs 2D Physics Model logo" width="60" height="60" loading="eager" decoding="async"><div class="brand-mark brand-mark-fallback hidden" id="brandLogoFallback" aria-hidden="true">F</div><div><div class="eyebrow">Interactive structural sandbox · 2D demonstrator</div><h1>FrameLabs 2</h1></div></div><div class="badge">EDUCATIONAL MODEL · NOT FOR DESIGN OR SAFETY DECISIONS</div></header>
-<section class="panel" aria-label="Sandbox construction tools">
- <div class="toolbar">
-  <div class="group"><div class="group-title">Interaction mode</div><div class="button-row" id="modeButtons"><button type="button" data-mode="build" class="active" aria-pressed="true" title="Shortcut: B">Build</button><button type="button" data-mode="demolish" aria-pressed="false" title="Shortcut: D · delete completely">Destroy</button><button type="button" data-mode="break" aria-pressed="false" title="Shortcut: K · fracture into loose pieces">Break</button><button type="button" data-mode="load" aria-pressed="false" title="Shortcut: L">Apply load</button><button type="button" data-mode="push" aria-pressed="false" title="Shortcut: P">Push</button><button type="button" data-mode="explosion" aria-pressed="false" title="Shortcut: E">Explosion</button><button type="button" data-mode="ignite" aria-pressed="false" title="Shortcut: I">Ignite</button><button type="button" data-mode="tether" aria-pressed="false" title="Shortcut: T · drag an object with a damped spring">Gravity tether</button></div><div class="field" style="margin-top:10px"><label for="componentType">Build component</label><select id="componentType"><option value="column">Support column</option><option value="beam">Beam</option><option value="slab">Floor slab</option><option value="brace">Diagonal brace</option><option value="crossbrace">Cross brace (X)</option></select><div class="field hidden" id="braceDirectionWrap" style="margin-top:8px"><label for="braceDirection">Brace direction</label><select id="braceDirection"><option value="up">Rising ↗</option><option value="down">Falling ↘</option></select></div></div></div>
-  <div class="group"><div class="group-title">Material library</div><div class="field"><label for="material">Material</label><select id="material"><option value="steel">Steel · high capacity</option><option value="concrete">Concrete · heavy</option><option value="wood">Wood · lower capacity</option><option value="flammable">Flammable composite · burns</option><option value="explosive">Explosive composite · chain reaction</option></select></div><div class="field"><label for="loadAmount">Load per click <output id="loadOut">2.0</output></label><input id="loadAmount" type="range" min="0.5" max="5" value="2" step="0.5"></div><div class="field"><label for="explosionPower">Blast power <output id="explosionOut">4</output></label><input id="explosionPower" type="range" min="1" max="10" value="4" step="1"></div><p style="margin:6px 0 0;color:var(--muted);font-size:10px;line-height:1.45">Explosions are virtual sandbox effects. Flammable composites can ignite, spread fire through connected members, and lose strength over time. Heat from nearby fire also weakens connected structural members before ignition. Explosive composites can detonate from nearby blast, sustained fire, or a strong impact, creating a capped chain reaction. These are fictional game materials; fire and blasts are confined to this simulation.</p></div>
-  <div class="group"><div class="group-title">Check and simulate</div><div class="action-grid"><button id="validate" class="primary" type="button" title="Run a fresh static check">Validate</button><button id="simulate" class="secondary" type="button" aria-pressed="false" title="Shortcut: Space">▶ Simulate</button><button id="resetPhysics" class="secondary" type="button" title="Restore member integrity and reset motion">Reset physics</button>
-<button id="precalculate" class="secondary" type="button" title="Run the existing physics engine ahead and record checkpoints">Pre-calculate</button>
-<button id="cancelPrecalculate" class="secondary" type="button" disabled>Cancel bake</button>
-<div class="replay-tools" id="replayTools" aria-label="Pre-calculation and replay controls">
- <label for="precalcDuration">Bake duration</label><select id="precalcDuration"><option value="3">3 seconds</option><option value="5" selected>5 seconds</option><option value="10">10 seconds</option></select>
- <progress id="precalcProgress" value="0" max="1"></progress><p id="replayStatus" class="environment-note" role="status" aria-live="polite">Bake a run to enable replay and timeline seeking.</p>
- <label for="replayTimeline">Replay timeline <output id="replayTimeLabel">0.00 s</output></label><input id="replayTimeline" type="range" min="0" max="0" value="0" step="1" disabled>
- <div class="replay-buttons"><button id="replayPlay" class="secondary" type="button" disabled>▶ Replay</button><button id="replayPause" class="secondary" type="button" disabled>Ⅱ Pause</button><button id="replayStop" class="secondary" type="button" disabled>■ Stop</button><label for="replaySpeed">Speed</label><select id="replaySpeed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>
-</div><button id="example" class="secondary" type="button" title="Load a small starter structure">Starter frame</button><button id="clear" class="danger" type="button">Clear design</button><button id="save" class="secondary" type="button" title="Export the current design to JSON">Save JSON</button><button id="loadJson" class="secondary" type="button" title="Load a FrameLabs 2 JSON file">Load JSON</button></div><div class="field example-picker"><label for="exampleFrames">Example buildings</label><select id="exampleFrames" aria-describedby="exampleNote"><option value="">Choose a saved design…</option><option value="research-center">Research Center (842)</option><option value="large-cinema">Large Cinema (1,827)</option><option value="large-building">Large Building (1,105)</option><option value="the-lab">The Lab (718)</option></select><button id="loadExample" class="secondary" type="button">Load selected example</button><p class="example-note" id="exampleNote">Loads the full 40 × 24 design and replaces the current layout. Save your work as JSON first if you want to keep it.</p></div><input id="fileInput" class="hidden" type="file" accept="application/json,.json"></div>
-  <div class="group"><div class="group-title">Display and readout</div><div class="field"><div class="group-title" style="margin-bottom:6px">Building area</div><div class="dimension-controls"><label for="baysInput">Bays<input id="baysInput" type="number" min="4" max="600" step="1" value="12" inputmode="numeric"></label><label for="levelsInput">Levels<input id="levelsInput" type="number" min="3" max="300" step="1" value="8" inputmode="numeric"></label></div><button id="applyDimensions" class="secondary" type="button" style="width:100%;margin-top:6px" title="Shortcut: apply the selected grid size">Resize grid</button><p style="margin:5px 0 0;color:var(--muted);font-size:9px;line-height:1.4">Range: 4–600 bays × 3–300 levels. (Very large grids may run slowly.)</p></div><div class="field"><label for="displayMode">Heatmap</label><select id="displayMode"><option value="stress">Stress / capacity</option><option value="integrity">Remaining integrity</option><option value="loadpath">Load path / floating clusters</option><option value="material">Material colors</option></select></div><div class="field"><label>Current tool</label><div id="toolStatus" style="font-size:12px;color:var(--cyan);min-height:30px;line-height:1.4">Build · Support column</div></div><div class="field"><label for="qualityPreset">Hardware quality</label><select id="qualityPreset"><option value="auto" selected>Auto · benchmark</option><option value="entry">Entry</option><option value="balanced">Balanced</option><option value="enthusiast">Enthusiast</option></select><p id="qualityStatus" class="environment-note" aria-live="polite">Running a brief performance check…</p></div><div class="field"><label for="computeMode">Physics compute</label><select id="computeMode"><option value="auto" selected>Auto · CPU worker / GPU</option><option value="cpu">CPU worker</option><option value="gpu">WebGPU · CPU fallback</option><option value="main">Main-thread CPU</option></select><p id="computeModeStatus" class="environment-note" aria-live="polite">Node/debris integration uses the selected backend; member constraints use a CPU worker. Structural analysis and collision/failure decisions remain CPU-side.</p></div><div class="field"><label for="surfaceMoisture">Surface moisture <output id="moistureOut">0%</output></label><input id="surfaceMoisture" type="range" min="0" max="100" step="5" value="0"><p class="environment-note">Wet surfaces change grip and darken material shading.</p></div><div class="field"><label for="waterLevel">Water level <output id="waterOut">Dry</output></label><input id="waterLevel" type="range" min="0" max="100" step="5" value="0"><p class="environment-note">Water applies buoyancy and stronger velocity-dependent drag below the waterline.</p></div><div class="field"><label for="windSpeed">Wind speed <output id="windOut">0 km/h · Calm</output></label><input id="windSpeed" type="range" min="0" max="100" step="5" value="0"><p class="environment-note">Wind sways the building, pushes loose debris, and carries smoke and dust sideways. Wind forces are simplified game physics.</p></div><div class="field"><label for="windDirection">Wind direction</label><select id="windDirection"><option value="-1">Blowing left ←</option><option value="1" selected>Blowing right →</option></select></div><p style="margin:4px 0 0;color:var(--muted);font-size:10px;line-height:1.45">Structural motion uses a fixed 120 Hz sub-step and iterative joint constraints. Material parameters are illustrative game units, not engineering data.</p></div>
- </div>
+<header class="topline"><div class="brand"><img class="brand-logo" id="brandLogo" src="https://cdn.phototourl.com/member/2026-10-16-d0d23b41-c667-4d19-8962-a846c54e71a5.png" alt="FrameLabs 2 logo" width="60" height="60" loading="eager" decoding="async"><div class="brand-mark brand-mark-fallback hidden" id="brandLogoFallback" aria-hidden="true">F</div><div class="brand-copy"><div class="eyebrow">CATX PRODUCTIONS · STRUCTURAL SANDBOX</div><h1>FrameLabs 2 <span>— Structural physics sandbox</span></h1></div></div><div class="badge">EDUCATIONAL MODEL · NOT FOR DESIGN OR SAFETY DECISIONS</div></header>
+<section class="panel control-panel" aria-label="Sandbox construction tools">
+  <div class="toolbar">
+    <div class="group group-placement">
+      <div class="group-title">Placing types</div>
+      <div class="field">
+        <label for="componentType">Structural component</label>
+        <select id="componentType">
+          <option value="column">Support column</option>
+          <option value="beam">Beam</option>
+          <option value="slab">Floor slab</option>
+          <option value="brace">Diagonal brace</option>
+          <option value="crossbrace">Cross brace (X)</option>
+        </select>
+      </div>
+      <div class="field hidden" id="braceDirectionWrap">
+        <label for="braceDirection">Brace direction</label>
+        <select id="braceDirection"><option value="up">Rising ↗</option><option value="down">Falling ↘</option></select>
+      </div>
+      <p class="group-note">Click or drag on the canvas to place continuous structural members.</p>
+    </div>
+
+    <div class="group group-simulation">
+      <div class="group-title">Simulation settings</div>
+      <div class="action-grid">
+        <button id="validate" class="primary" type="button" title="Run a fresh static check">Validate</button>
+        <button id="simulate" class="secondary" type="button" aria-pressed="false" title="Shortcut: Space">▶ Simulate</button>
+        <button id="resetPhysics" class="secondary" type="button" title="Restore member integrity and reset motion">Reset physics</button>
+        <button id="precalculate" class="secondary" type="button" title="Run the existing physics engine ahead and record checkpoints">Pre-calculate</button>
+        <button id="cancelPrecalculate" class="secondary" type="button" disabled>Cancel bake</button>
+        <div class="replay-tools" id="replayTools" aria-label="Pre-calculation and replay controls">
+          <label for="precalcDuration">Bake duration</label>
+          <select id="precalcDuration"><option value="3">3 seconds</option><option value="5" selected>5 seconds</option><option value="10">10 seconds</option></select>
+          <progress id="precalcProgress" value="0" max="1"></progress>
+          <p id="replayStatus" class="environment-note" role="status" aria-live="polite">Bake a run to enable replay and timeline seeking.</p>
+          <label for="replayTimeline">Replay timeline <output id="replayTimeLabel">0.00 s</output></label>
+          <input id="replayTimeline" type="range" min="0" max="0" value="0" step="1" disabled>
+          <div class="replay-buttons">
+            <button id="replayPlay" class="secondary" type="button" disabled>▶ Replay</button>
+            <button id="replayPause" class="secondary" type="button" disabled>Ⅱ Pause</button>
+            <button id="replayStop" class="secondary" type="button" disabled>■ Stop</button>
+            <label for="replaySpeed">Speed</label>
+            <select id="replaySpeed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="group group-mode">
+      <div class="group-title">Mode selection</div>
+      <div class="button-row" id="modeButtons">
+        <button type="button" data-mode="build" class="active" aria-pressed="true" title="Shortcut: B">Build</button>
+        <button type="button" data-mode="demolish" aria-pressed="false" title="Shortcut: D · delete completely">Destroy</button>
+        <button type="button" data-mode="break" aria-pressed="false" title="Shortcut: K · fracture into loose pieces">Break</button>
+        <button type="button" data-mode="load" aria-pressed="false" title="Shortcut: L">Apply load</button>
+        <button type="button" data-mode="push" aria-pressed="false" title="Shortcut: P">Push</button>
+        <button type="button" data-mode="explosion" aria-pressed="false" title="Shortcut: E">Explosion</button>
+        <button type="button" data-mode="ignite" aria-pressed="false" title="Shortcut: I">Ignite</button>
+        <button type="button" data-mode="tether" aria-pressed="false" title="Shortcut: T · drag an object with a damped spring">Gravity tether</button>
+      </div>
+    </div>
+
+    <div class="group group-material">
+      <div class="group-title">Material &amp; interaction settings</div>
+      <div class="field">
+        <label for="material">Material library</label>
+        <select id="material">
+          <option value="steel">Steel · high capacity</option>
+          <option value="concrete">Concrete · heavy</option>
+          <option value="wood">Wood · lower capacity</option>
+          <option value="flammable">Flammable composite · burns</option>
+          <option value="explosive">Explosive composite · chain reaction</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="loadAmount">Load per click <output id="loadOut">2.0</output></label>
+        <input id="loadAmount" type="range" min="0.5" max="5" value="2" step="0.5">
+      </div>
+      <div class="field">
+        <label for="explosionPower">Blast power <output id="explosionOut">4</output></label>
+        <input id="explosionPower" type="range" min="1" max="10" value="4" step="1">
+      </div>
+      <p class="group-note">Explosions are virtual sandbox effects. Flammable composites can ignite, spread fire through connected members, and lose strength over time. Nearby heat weakens connected members; explosive composites can detonate from a blast, sustained fire, or strong impact. All effects are confined to this simulation.</p>
+    </div>
+
+    <div class="group group-files">
+      <div class="group-title">Files &amp; preset buildings</div>
+      <div class="file-action-grid">
+        <button id="example" class="secondary" type="button" title="Load a small starter structure">Starter frame</button>
+        <button id="clear" class="danger" type="button">Clear design</button>
+        <button id="save" class="secondary" type="button" title="Export the current design to JSON">Save JSON</button>
+        <button id="loadJson" class="secondary" type="button" title="Load a FrameLabs 2 JSON file">Load JSON</button>
+      </div>
+      <div class="field example-picker">
+        <label for="exampleFrames">Example buildings</label>
+        <select id="exampleFrames" aria-describedby="exampleNote">
+          <option value="">Choose a saved design…</option>
+          <option value="research-center">Research Center (842)</option>
+          <option value="large-cinema">Large Cinema (1,827)</option>
+          <option value="large-building">Large Building (1,105)</option>
+          <option value="the-lab">The Lab (718)</option>
+        </select>
+        <button id="loadExample" class="secondary" type="button">Load selected example</button>
+        <p class="example-note" id="exampleNote">Loads the selected building and replaces the current layout. Save your work as JSON first if you want to keep it.</p>
+      </div>
+      <div class="field">
+        <div class="field-label">Building dimensions</div>
+        <div class="dimension-controls">
+          <label for="baysInput">Bays<input id="baysInput" type="number" min="4" max="600" step="1" value="12" inputmode="numeric"></label>
+          <label for="levelsInput">Levels<input id="levelsInput" type="number" min="3" max="300" step="1" value="8" inputmode="numeric"></label>
+        </div>
+        <button id="applyDimensions" class="secondary full-width" type="button" title="Shortcut: apply the selected grid size">Resize grid</button>
+        <p class="group-note">Range: 4–600 bays × 3–300 levels. Very large grids can run slowly.</p>
+      </div>
+      <input id="fileInput" class="hidden" type="file" accept="application/json,.json">
+    </div>
+
+    <div class="group group-environment">
+      <div class="group-title">Slider bars · environment</div>
+      <div class="environment-grid">
+        <div class="field">
+          <label for="surfaceMoisture">Surface moisture <output id="moistureOut">0%</output></label>
+          <input id="surfaceMoisture" type="range" min="0" max="100" step="5" value="0">
+          <p class="environment-note">Wet surfaces change grip and darken material shading.</p>
+        </div>
+        <div class="field">
+          <label for="waterLevel">Water level <output id="waterOut">Dry</output></label>
+          <input id="waterLevel" type="range" min="0" max="100" step="5" value="0">
+          <p class="environment-note">Water adds buoyancy and velocity-dependent drag below the waterline.</p>
+        </div>
+        <div class="field">
+          <label for="windSpeed">Wind speed <output id="windOut">0 km/h · Calm</output></label>
+          <input id="windSpeed" type="range" min="0" max="100" step="5" value="0">
+          <p class="environment-note">Wind sways the building, pushes debris, and carries smoke and dust.</p>
+        </div>
+        <div class="field">
+          <label for="windDirection">Wind direction</label>
+          <select id="windDirection"><option value="-1">Blowing left ←</option><option value="1" selected>Blowing right →</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="group group-display">
+      <div class="group-title">Simulation view &amp; engine</div>
+      <div class="display-grid">
+        <div class="field">
+          <label for="displayMode">Heatmap</label>
+          <select id="displayMode"><option value="stress">Stress / capacity</option><option value="integrity">Remaining integrity</option><option value="loadpath">Load path / floating clusters</option><option value="material">Material colors</option></select>
+        </div>
+        <div class="field">
+          <label>Current tool</label>
+          <div id="toolStatus" class="tool-status" aria-live="polite">Build · Support column</div>
+        </div>
+        <div class="field">
+          <label for="qualityPreset">Hardware quality</label>
+          <select id="qualityPreset"><option value="auto" selected>Auto · benchmark</option><option value="entry">Entry</option><option value="balanced">Balanced</option><option value="enthusiast">Enthusiast</option></select>
+          <p id="qualityStatus" class="environment-note" aria-live="polite">Running a brief performance check…</p>
+        </div>
+        <div class="field">
+          <label for="computeMode">Physics compute</label>
+          <select id="computeMode"><option value="auto" selected>Auto · CPU worker / GPU</option><option value="cpu">CPU worker</option><option value="gpu">WebGPU · CPU fallback</option><option value="main">Main-thread CPU</option></select>
+          <p id="computeModeStatus" class="environment-note" aria-live="polite">Node/debris integration uses the selected backend; member constraints use a CPU worker. Structural analysis and collision/failure decisions remain CPU-side.</p>
+        </div>
+      </div>
+      <p class="group-note">The solver uses a 120 Hz sub-step with iterative joint constraints. Material parameters are illustrative game units, not engineering data.</p>
+    </div>
+  </div>
 </section>
 <section class="stage" aria-label="Interactive building grid">
  <div class="stage-head"><div class="scenario-name"><span id="liveDot" class="live-dot"></span><span id="caseTitle">Empty sandbox · ready to build</span></div><div class="view-control"><span id="gridSizeLabel">Grid: 12 bays × 8 levels</span></div></div>
@@ -79,3 +230,4 @@
 <script src="./js/main.js"></script>
 </body>
 </html>
+
