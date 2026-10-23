@@ -1,4 +1,4 @@
-# FrameLab — original structural sandbox with adaptive physics and compute helpers
+# FrameLabs 2 — structural sandbox with adaptive physics and compute helpers
 
 This package is based on the supplied original FrameLab project. It preserves the original building examples, structural solver, layout, materials, failure flow, and canvas renderer while adding a reduced-order contact/environment model and a few optional interaction/rendering systems.
 
@@ -16,7 +16,15 @@ Serve the folder over HTTP/HTTPS (for example, GitHub Pages or `python -m http.s
 - **Adaptive quality** performs a brief synthetic CPU constraint benchmark and, where available, a supplemental WebGPU demand/capacity-scan benchmark. Entry/Balanced/Enthusiast presets tune constraint iterations, debris and particle caps, render pixel ratio, contact-shadow approximation, and atmospheric/wet highlights. Manual presets remain selected instead of being overwritten by the automatic result.
 - **Moisture and water sliders** influence contact response and provide lightweight Canvas2D material/water visual cues.
 - **Collapse dust and fire smoke** use world-space particles: member failures produce soft, expanding dust bursts, fast ground impacts kick up larger plumes, and burning structural members/debris continuously emit gray smoke that rises, drifts and fades. Particle motion runs on the render clock (including while physics is paused), and each quality preset limits the active particle budget to avoid unbounded growth. These are layered Canvas2D sprites, not volumetric simulation.
-- **Hide UI (`H`)** expands the simulation canvas; **Icons: On/Off (`O`)** hides annotation clutter such as grid lines, node dots, labels, load arrows, contact/failure markers, hover hints and status banners. Both floating controls stay available.
+- **Immersive fullscreen (`F`)** opens a simulation-first fullscreen view when the browser supports native fullscreen; press `Esc` to exit native fullscreen. **Icons: On/Off (`O`)** toggles drawing annotations such as node labels and load arrows. The simulation preserves its aspect ratio rather than stretching to fit unusual screen shapes.
+
+## Material library and beginner guide
+
+Material definitions are centralized in `js/materials.js`, separate from the formulas and environment response in `js/physics-model.js`. Each material has explicit Boolean `isExplosive` and `isFlamable` settings (the library also accepts the usual spelling `isFlammable`). Set either or both to `true` to enable the existing virtual fire and/or chain-reaction behavior for that material.
+
+To add a material, use the readable `addMaterial({...})` helper in `js/materials.js`. You can base it on an existing material, then override its color, component mass/strength, friction, heat response, impact resistance, or behavior flags. The Material dropdown updates when a new material is registered. Building JSON exports include custom material definitions and their impact-resistance settings, so compatible custom materials can be restored when importing a design.
+
+Start with the [beginner material guide](js/MATERIALS_GUIDE.md). The guide explains the required ID, inherited defaults, behavior flags, and a copy-edit example. Material values are simplified game settings, not real-world engineering data.
 
 ## CPU worker and WebGPU physics integration
 
