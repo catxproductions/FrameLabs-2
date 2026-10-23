@@ -536,7 +536,7 @@ function emitFireSmoke(dt){
   sources.push({kind:'debris',e:d,d,baseInterval:.13});
  }
  const fireCount=sources.length;
- const smokeDensity=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,2);
+ const smokeDensity=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,10);
  sim.fireSmokeSourceCount=fireCount;
  sim.fireSmokeScale=clamp(1+Math.max(0,fireCount-1)*.12,1,2.8);
  if(!fireCount||smokeDensity<=0){for(const source of sources)source.e.smokeEmissionClock=0;sim.smokeEmissionCursor=0;return}
