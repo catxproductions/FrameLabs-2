@@ -149,6 +149,177 @@
     return Object.keys(materials);
   }
 
+  /**
+   * Register custom materials saved inside a FrameLabs BuildingMap JSON export.
+   *
+   * Existing built-ins are never overwritten. If a custom ID already exists,
+   * its settings must match the file; otherwise the import stops with a readable
+   * error instead of silently changing the material's physics.
+   *
+   * Returns the IDs of the newly registered materials.
+   */
+  function importMaterialLibrary(payload) {
+    if (!payload || typeof payload !== 'object') {
+      throw new TypeError('Material import needs a parsed design object.');
+    }
+
+    const incomingMaterials = payload.materialLibrary;
+    if (
+      !incomingMaterials ||
+      typeof incomingMaterials !== 'object' ||
+      Array.isArray(incomingMaterials)
+    ) {
+      return [];
+    }
+
+    const incomingImpact = payload.materialImpactResistance &&
+      typeof payload.materialImpactResistance === 'object' &&
+      !Array.isArray(payload.materialImpactResistance)
+      ? payload.materialImpactResistance
+      : {};
+
+    const builtInIds = new Set([
+      'steel',
+      'concrete',
+      'wood',
+      'flammable',
+      'explosive'
+    ]);
+    const pending = [];
+
+    function sameDefinition(id, current, saved, savedImpact) {
+      const textProperties = ['label', 'color'];
+      const numberProperties = [
+        'density',
+        'staticFriction',
+        'dynamicFriction',
+        'restitution',
+        'wetSensitivity',
+        'elasticity',
+        'heatWeakening',
+        'heatSensitivity'
+      ];
+
+      for (const property of textProperties) {
+        if (current[property] !== saved[property]) return false;
+      }
+
+      // Older exports may not contain newer optional properties.
+      for (const property of numberProperties) {
+        if (
+          Object.prototype.hasOwnProperty.call(saved, property) &&
+          Number(current[property]) !== Number(saved[property])
+        ) {
+          return false;
+        }
+      }
+
+      const savedFlammable = typeof saved.isFlamable === 'boolean'
+        ? saved.isFlamable
+        : typeof saved.isFlammable === 'boolean'
+          ? saved.isFlammable
+          : false;
+
+      if (
+        current.isExplosive !== (saved.isExplosive === true) ||
+        current.isFlamable !== savedFlammable
+      ) {
+        return false;
+      }
+
+      for (const kind of COMPONENT_KINDS) {
+        if (
+          Number(current[kind]?.mass) !== Number(saved[kind]?.mass) ||
+          Number(current[kind]?.capacity) !== Number(saved[kind]?.capacity)
+        ) {
+          return false;
+        }
+
+        if (
+          savedImpact &&
+          Number(impactResistance[id]?.[kind]) !== Number(savedImpact[kind])
+        ) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    // Validate and prepare every definition before changing the live library.
+    for (const [id, saved] of Object.entries(incomingMaterials)) {
+      if (!/^[a-z][a-z0-9_-]*$/.test(id)) {
+        throw new Error('The design contains an invalid custom material id: "' + id + '".');
+      }
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+        throw new Error('The saved settings for material "' + id + '" are invalid.');
+      }
+
+      // Never let a saved file replace one of the known built-in definitions.
+      if (materials[id]) {
+        if (builtInIds.has(id)) continue;
+
+        const savedImpact = incomingImpact[id] &&
+          typeof incomingImpact[id] === 'object' &&
+          !Array.isArray(incomingImpact[id])
+          ? incomingImpact[id]
+          : null;
+
+        if (!sameDefinition(id, materials[id], saved, savedImpact)) {
+          throw new Error(
+            'Custom material "' + id + '" already exists with different settings. ' +
+            'Use a unique id or make its entry in materials.js match the imported design.'
+          );
+        }
+        continue;
+      }
+
+      if (pending.length >= 100) {
+        throw new Error('This design contains too many custom materials (limit: 100).');
+      }
+
+      const options = {
+        id: id,
+        label: typeof saved.label === 'string' ? saved.label.slice(0, 100) : id,
+        color: saved.color,
+        basedOn: 'concrete',
+
+        // Only real booleans are accepted. Missing flags default to false on import.
+        isExplosive: typeof saved.isExplosive === 'boolean' ? saved.isExplosive : false,
+        isFlamable: typeof saved.isFlamable === 'boolean'
+          ? saved.isFlamable
+          : typeof saved.isFlammable === 'boolean'
+            ? saved.isFlammable
+            : false,
+
+        density: saved.density,
+        staticFriction: saved.staticFriction,
+        dynamicFriction: saved.dynamicFriction,
+        restitution: saved.restitution,
+        wetSensitivity: saved.wetSensitivity,
+        elasticity: saved.elasticity,
+        heatWeakening: saved.heatWeakening,
+        heatSensitivity: saved.heatSensitivity,
+
+        column: saved.column,
+        beam: saved.beam,
+        slab: saved.slab,
+        brace: saved.brace,
+        impactResistance: incomingImpact[id]
+      };
+
+      pending.push(options);
+    }
+
+    const registeredIds = [];
+    for (const options of pending) {
+      addMaterial(options);
+      registeredIds.push(options.id);
+    }
+
+    return registeredIds;
+  }
+
   // Ask for a behavior by capability, not by a built-in material id.
   // The second spelling is an alias to make the API forgiving of the common typo.
   function isFlammable(id) {
@@ -303,6 +474,7 @@
     addMaterial: addMaterial,
     getMaterial: getMaterial,
     getMaterialIds: getMaterialIds,
+    importMaterialLibrary: importMaterialLibrary,
     isFlammable: isFlammable,
     isExplosive: isExplosive
   });
