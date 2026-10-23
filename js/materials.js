@@ -149,6 +149,17 @@
     return Object.keys(materials);
   }
 
+  // Ask for a behavior by capability, not by a built-in material id.
+  // The second spelling is an alias to make the API forgiving of the common typo.
+  function isFlammable(id) {
+    const material = materials[id];
+    return material?.isFlamable === true || material?.isFlammable === true;
+  }
+
+  function isExplosive(id) {
+    return materials[id]?.isExplosive === true;
+  }
+
   // Built-in materials. Keep these ids stable because saved designs use them.
   addMaterial({
     id: 'steel',
@@ -291,6 +302,8 @@
     componentKinds: COMPONENT_KINDS,
     addMaterial: addMaterial,
     getMaterial: getMaterial,
-    getMaterialIds: getMaterialIds
+    getMaterialIds: getMaterialIds,
+    isFlammable: isFlammable,
+    isExplosive: isExplosive
   });
 })();
