@@ -9,6 +9,9 @@ const PHYSICS_MODEL=window.FrameLabPhysicsModel||null;
 const QUALITY_PRESETS={entry:{label:'Entry',pixelRatio:1,maxDebris:90,maxParticles:170,constraintIterations:5,contactShadows:false,atmosphere:false,wetHighlights:false},balanced:{label:'Balanced',pixelRatio:1.5,maxDebris:170,maxParticles:360,constraintIterations:8,contactShadows:true,atmosphere:true,wetHighlights:true},enthusiast:{label:'Enthusiast',pixelRatio:2,maxDebris:280,maxParticles:600,constraintIterations:11,contactShadows:true,atmosphere:true,wetHighlights:true}};
 let MAX_DEBRIS=QUALITY_PRESETS.balanced.maxDebris,MAX_ATMOSPHERIC_PARTICLES=QUALITY_PRESETS.balanced.maxParticles,QUALITY_PROFILE=QUALITY_PRESETS.balanced,qualityMode='auto',showSimulationOverlays=true,gravityTether=null;
 const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1,windTime:0};
+// These settings tune appearance only. Heat, fuel consumption, ignition, and
+// material damage remain governed by the simulation model.
+const EFFECT_SETTINGS={fireRealism:.80,fireDensity:1,fireSize:1,dustRealism:.72,dustDensity:1,dustSize:1,smokeRealism:.78,smokeDensity:1,smokeSize:1};
 function windSpeedRatio(){return clamp((Number(ENVIRONMENT.windSpeed)||0)/100,0,1)}
 function windDirectionSign(){return Number(ENVIRONMENT.windDirection)<0?-1:1}
 function windGustFactor(time=ENVIRONMENT.windTime){return clamp(1+.16*Math.sin((Number(time)||0)*1.13)+.08*Math.sin((Number(time)||0)*.47+1.7),.70,1.24)}
@@ -25,10 +28,10 @@ function updateLateralSway(dt){
  const step=clamp(Number(dt)||0,0,.05);if(step<=0)return;
  const old=Array.from(sim.lateralDisp),speed=windSpeedRatio(),direction=windDirectionSign(),gust=windGustFactor();
  // Scale the per-story forcing with grid height so a 300-level model remains bounded.
- const heightScale=Math.pow(8/Math.max(8,NY),2);
+ // Wind is scaled by relative height, not total grid height.
  for(let level=1;level<=NY;level++){
   const below=old[level-1]-old[level],above=level<NY?old[level+1]-old[level]:0;
-  const windAx=direction*speed*speed*(.035+.22*level/Math.max(1,NY))*gust*heightScale;
+  const windAx=direction*speed*speed*(.18+1.05*level/Math.max(1,NY))*gust;
   const ax=below*10+above*5-3.8*sim.lateralVel[level]+windAx;
   sim.lateralVel[level]=clamp(sim.lateralVel[level]+ax*step,-7,7);
   sim.lateralDisp[level]=clamp(sim.lateralDisp[level]+sim.lateralVel[level]*step,-2.6,2.6);
@@ -464,19 +467,52 @@ function addAtmosphericParticle(particle){
 }
 function spawnDustPlume(x,y,intensity=1,sourceVx=0,sourceVy=0){
  if(!Number.isFinite(x+y))return;
+ const density=clamp(Number(EFFECT_SETTINGS.dustDensity)||0,0,2);
+ if(density<=0)return;
  intensity=clamp(Number(intensity)||1,.2,3.4);
- const count=Math.round(9+intensity*9),horizontalDrift=clamp(Number(sourceVx)||0,-3.5,3.5)*.12;
+ const realism=clamp(Number(EFFECT_SETTINGS.dustRealism)||0,0,1);
+ const plumeSize=clamp(Number(EFFECT_SETTINGS.dustSize)||1,.5,2.5);
+ const count=Math.max(1,Math.round((9+intensity*9)*density));
+ const horizontalDrift=clamp(Number(sourceVx)||0,-3.5,3.5)*.12;
  for(let i=0;i<count;i++){
-  const spread=(Math.random()*2-1),upward=Math.random(),life=6.5+Math.random()*(2.0+intensity*.4);
-  addAtmosphericParticle({kind:'dust',x:x+spread*.055*intensity,y:y+(Math.random()-.5)*.08*intensity,vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity,vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,age:0,life,size:.035+Math.random()*(.055+.025*intensity),growth:.018+Math.random()*.045,opacity:.19+Math.random()*.2,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.45,drift:.12+Math.random()*.38,seed:Math.random()*Math.PI*2,tint:Math.random()});
+  const spread=(Math.random()*2-1),upward=Math.random();
+  const life=(6.5+Math.random()*(2.0+intensity*.4))*(.92+realism*.12);
+  addAtmosphericParticle({
+   kind:'dust',x:x+spread*.055*intensity*plumeSize,
+   y:y+(Math.random()-.5)*.08*intensity*plumeSize,
+   vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity*(.75+plumeSize*.25),
+   vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,
+   age:0,life,size:(.035+Math.random()*(.055+.025*intensity))*plumeSize,
+   growth:(.018+Math.random()*.045)*(.65+plumeSize*.35),
+   opacity:clamp((.19+Math.random()*.2)*(.9+realism*.18),.05,.58),
+   rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*(.25+realism*.35),
+   drift:.12+Math.random()*(.25+realism*.25),seed:Math.random()*Math.PI*2,
+   tint:Math.random(),realism,scale:plumeSize
+  });
  }
 }
 function spawnSmokePuff(x,y,sourceVx=0,sourceVy=0,scale=1){
  if(!Number.isFinite(x+y))return;
- const fireScale=clamp(Number(sim.fireSmokeScale)||1,1,2.8),lifeMultiplier=clamp(1+(fireScale-1)*.5,1,1.9),opacityMultiplier=clamp(1+(fireScale-1)*.14,1,1.25);
- // Apply the active-fire profile to the stored scale so the renderer can draw truly larger clouds.
- scale=clamp((Number(scale)||1)*fireScale*1.12,.5,4.2);
- addAtmosphericParticle({kind:'smoke',x:x+(Math.random()-.5)*.035,y,vx:clamp((Number(sourceVx)||0)*.10+(Math.random()-.5)*.22,-.8,.8),vy:.28+Math.random()*.28+Math.max(0,Number(sourceVy)||0)*.04,age:0,life:(4.2+Math.random()*2.2)*lifeMultiplier,size:.07+Math.random()*.055,growth:.11+Math.random()*.095,opacity:(.25+Math.random()*.17)*opacityMultiplier,rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*.22,drift:.13+Math.random()*.27,seed:Math.random()*Math.PI*2,tint:Math.random(),scale});
+ const density=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,2);
+ if(density<=0)return;
+ const realism=clamp(Number(EFFECT_SETTINGS.smokeRealism)||0,0,1);
+ const plumeSize=clamp(Number(EFFECT_SETTINGS.smokeSize)||1,.5,2.5);
+ const fireScale=clamp(Number(sim.fireSmokeScale)||1,1,2.8);
+ const lifeMultiplier=clamp(1+(fireScale-1)*.5,1,1.9);
+ const opacityMultiplier=clamp(1+(fireScale-1)*.14,1,1.25);
+ scale=clamp((Number(scale)||1)*fireScale*1.12*plumeSize,.35,6.8);
+ addAtmosphericParticle({
+  kind:'smoke',x:x+(Math.random()-.5)*.035*plumeSize,y,
+  vx:clamp((Number(sourceVx)||0)*.10+(Math.random()-.5)*(.22+realism*.10),-1.1,1.1),
+  vy:.28+Math.random()*(.24+realism*.12)+Math.max(0,Number(sourceVy)||0)*.04,
+  age:0,life:(4.2+Math.random()*2.2)*lifeMultiplier*(.92+realism*.14),
+  size:(.07+Math.random()*.055)*(.9+realism*.22),
+  growth:(.11+Math.random()*.095)*(.85+plumeSize*.15),
+  opacity:clamp((.25+Math.random()*.17)*opacityMultiplier*(.88+realism*.18),.05,.72),
+  rotation:Math.random()*Math.PI,spin:(Math.random()-.5)*(.14+realism*.18),
+  drift:.13+Math.random()*(.20+realism*.18),seed:Math.random()*Math.PI*2,
+  tint:Math.random(),scale,realism
+ });
 }
 function emitFireSmoke(dt){
  const sources=[];
@@ -484,24 +520,25 @@ function emitFireSmoke(dt){
  for(const link of sim.memberLinks){
   const e=link.e;if(!e.burning||e.failed)continue;
   const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
-  e.smokeEmissionClock=(e.smokeEmissionClock||0)+dt;
+  e.smokeEmissionClock=Math.min((e.smokeEmissionClock||0)+dt,.5);
   sources.push({kind:'member',e,a,b,baseInterval:.112+(Math.abs(Number(e.x)||0)%3)*.009});
  }
  for(const d of sim.debris){
   if(!d.burning)continue;
-  d.smokeEmissionClock=(d.smokeEmissionClock||0)+dt;
+  d.smokeEmissionClock=Math.min((d.smokeEmissionClock||0)+dt,.5);
   sources.push({kind:'debris',e:d,d,baseInterval:.13});
  }
  const fireCount=sources.length;
+ const smokeDensity=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,2);
  sim.fireSmokeSourceCount=fireCount;
  sim.fireSmokeScale=clamp(1+Math.max(0,fireCount-1)*.12,1,2.8);
- if(!fireCount){sim.smokeEmissionCursor=0;return}
+ if(!fireCount||smokeDensity<=0){sim.smokeEmissionCursor=0;return}
  const intervalBoost=clamp(1+(sim.fireSmokeScale-1)*.35,1,1.65);
  const due=[];
  for(const source of sources){source.interval=source.baseInterval/intervalBoost;if(source.e.smokeEmissionClock>=source.interval)due.push(source)}
  if(!due.length)return;
  // Emission capacity increases with active fires, and a rotating cursor prevents early members from starving later ones.
- const emitBudget=clamp(10+Math.ceil(Math.sqrt(fireCount)*7),10,48),start=Math.floor(Number(sim.smokeEmissionCursor)||0)%due.length,emitCount=Math.min(emitBudget,due.length);
+ const emitBudget=clamp(Math.ceil((10+Math.ceil(Math.sqrt(fireCount)*7))*smokeDensity),0,48),start=Math.floor(Number(sim.smokeEmissionCursor)||0)%due.length,emitCount=Math.min(emitBudget,due.length);
  const puffsPerSource=sim.fireSmokeScale>=2.35?2:1;
  for(let i=0;i<emitCount;i++){
   const source=due[(start+i)%due.length];source.e.smokeEmissionClock%=source.interval;
@@ -525,7 +562,7 @@ function updateAtmosphericParticles(dt){
   const p=particles[i];p.age+=step;
   if(p.age>=p.life){particles.splice(i,1);continue}
   const phase=p.seed+p.age*(p.kind==='smoke'?1.25:2.6),rise=p.kind==='smoke'?.19:.035;
-  const windTarget=windDirectionSign()*windSpeedRatio()*(p.kind==='smoke'?.50:.38);p.vx+=(Math.sin(phase)*p.drift+windTarget-(p.vx||0)*(p.kind==='smoke'?.55:.70))*step;
+  const windTarget=windDirectionSign()*windSpeedRatio()*windGustFactor()*(p.kind==='smoke'?1.15:.88);p.vx+=(Math.sin(phase)*p.drift+windTarget-(p.vx||0)*(p.kind==='smoke'?.55:.70))*step;
   p.vy+=rise*step;p.x+=p.vx*step;p.y+=p.vy*step;p.size+=p.growth*step;p.rotation+=(p.spin||0)*step;
  }
 }
@@ -536,15 +573,25 @@ function drawAtmosphericParticles(){
   const life=clamp(1-p.age/p.life,0,1),fadeIn=clamp(p.age/.10,0,1),alpha=(p.opacity||.2)*fadeIn*Math.pow(life,p.kind==='smoke'?.9:1.15),x=GRID_LEFT+p.x/STORY_HEIGHT*DX,y=GROUND_Y-p.y/STORY_HEIGHT*STORY_PX,r=Math.max(1.15,p.size*STORY_PX*(p.kind==='smoke'?1.22*(p.scale||1):1));
   if(x<-r*2||x>W+r*2||y<-r*2||y>H+r*2||alpha<.008)continue;
   ctx.globalAlpha=alpha;
+  const realism=clamp(Number(EFFECT_SETTINGS[p.kind==='smoke'?'smokeRealism':'dustRealism'])||0,0,1);
   const gradient=ctx.createRadialGradient(x-r*.18,y-r*.18,r*.035,x,y,r);
   if(p.kind==='smoke'){
-   const shade=clamp(Math.round(86+p.tint*65+(1-life)*16),65,170),green=clamp(shade+3,0,185),blue=clamp(shade+9,0,195);
-   gradient.addColorStop(0,`rgba(${shade},${green},${blue},.58)`);gradient.addColorStop(.38,`rgba(${shade+7},${green+5},${blue+5},.34)`);gradient.addColorStop(.74,`rgba(${shade+12},${green+10},${blue+8},.13)`);
+   const shade=clamp(Math.round(76+p.tint*70+(1-life)*20),58,170),green=clamp(shade+5,0,185),blue=clamp(shade+12,0,195);
+   gradient.addColorStop(0,`rgba(${shade},${green},${blue},.62)`);gradient.addColorStop(.34,`rgba(${shade+6},${green+5},${blue+5},.38)`);gradient.addColorStop(.72,`rgba(${shade+15},${green+12},${blue+10},.14)`);
   }else{
-   const red=Math.round(143+p.tint*70),green=Math.round(116+p.tint*51),blue=Math.round(80+p.tint*36);
-   gradient.addColorStop(0,`rgba(${red+18},${green+12},${blue+8},.58)`);gradient.addColorStop(.42,`rgba(${red},${green},${blue},.37)`);gradient.addColorStop(.78,`rgba(${red-7},${green-5},${blue-3},.12)`);
+   const red=Math.round(136+p.tint*72),green=Math.round(108+p.tint*58),blue=Math.round(70+p.tint*39);
+   gradient.addColorStop(0,`rgba(${red+18},${green+12},${blue+8},.60)`);gradient.addColorStop(.40,`rgba(${red},${green},${blue},.38)`);gradient.addColorStop(.78,`rgba(${red-7},${green-5},${blue-3},.13)`);
   }
-  gradient.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=gradient;ctx.beginPath();ctx.ellipse(x,y,r*(p.kind==='smoke'?.90:1.12),r*(p.kind==='smoke'?1.16:.82),p.rotation||0,0,Math.PI*2);ctx.fill();
+  gradient.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=gradient;
+  ctx.beginPath();ctx.ellipse(x,y,r*(p.kind==='smoke'?.90:1.12),r*(p.kind==='smoke'?1.16:.82),p.rotation||0,0,Math.PI*2);ctx.fill();
+  // Soft offset lobes make the clouds look less like isolated identical circles.
+  for(let lobe=0;lobe<Math.floor(realism*2);lobe++){
+   const angle=(p.seed||0)+lobe*2.399963;
+   ctx.globalAlpha=alpha*(.13+realism*.13);ctx.beginPath();
+   ctx.ellipse(x+Math.cos(angle)*r*(.30+realism*.10),y+Math.sin(angle)*r*.22,
+    r*(p.kind==='smoke'?.62:.52),r*(p.kind==='smoke'?.68:.55),(p.rotation||0)+angle*.25,0,Math.PI*2);
+   ctx.fill();
+  }
  }
  ctx.restore();
 }
@@ -1077,16 +1124,58 @@ function detonateAt(px,py){
 function drawMaterialEffects(){
  // A subtle orange glow marks heat-weakened, not-yet-burning members.
  for(const link of sim.memberLinks){const e=link.e;if(!e||e.failed||e.burning||(e.thermalDamage||0)<.035)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const x1=GRID_LEFT+a.position.x/STORY_HEIGHT*DX,y1=GROUND_Y-a.position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+b.position.x/STORY_HEIGHT*DX,y2=GROUND_Y-b.position.y/STORY_HEIGHT*STORY_PX;ctx.save();ctx.globalAlpha=clamp(e.thermalDamage*.82,.06,.55);ctx.strokeStyle='#ff9857';ctx.lineWidth=1.8+e.thermalDamage*3.2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore()}
- // Small animated flame glyphs follow active flammable structural members; no external assets needed.
- for(const link of sim.memberLinks){const e=link.e;if(!e.burning||e.failed)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
-  const x1=GRID_LEFT+a.position.x/STORY_HEIGHT*DX,y1=GROUND_Y-a.position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+b.position.x/STORY_HEIGHT*DX,y2=GROUND_Y-b.position.y/STORY_HEIGHT*STORY_PX;
-  ctx.save();ctx.lineCap='round';ctx.strokeStyle='rgba(255,113,52,.5)';ctx.lineWidth=8;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-  const length=Math.hypot(x2-x1,y2-y1),count=clamp(Math.floor(length/25),1,8);
-  for(let i=0;i<count;i++){const t=(i+.5)/count,x=x1+(x2-x1)*t,y=y1+(y2-y1)*t,phase=sim.time*9+i*2.1+e.x*.7,h=5+Math.abs(Math.sin(phase))*7,w=2.4+Math.abs(Math.cos(phase))*1.6;
-   ctx.globalAlpha=.72+.2*Math.sin(phase);ctx.fillStyle=i%2?'#ffb347':'#ff743c';ctx.beginPath();ctx.moveTo(x-w,y+2);ctx.quadraticCurveTo(x-w*1.7,y-h*.35,x,y-h);ctx.quadraticCurveTo(x+w*1.7,y-h*.35,x+w,y+2);ctx.closePath();ctx.fill();ctx.fillStyle='#ffe29a';ctx.beginPath();ctx.ellipse(x,y-h*.28,w*.42,h*.25,0,0,Math.PI*2);ctx.fill();
-  }ctx.restore();
+ // Flames are visual-only: fuel consumption and fire spread stay in the physics model.
+ const fireRealism=clamp(Number(EFFECT_SETTINGS.fireRealism)||0,0,1);
+ const fireDensity=clamp(Number(EFFECT_SETTINGS.fireDensity)||0,0,2);
+ const fireSize=clamp(Number(EFFECT_SETTINGS.fireSize)||1,.5,2);
+ if(fireDensity>0){
+  for(const link of sim.memberLinks){
+   const e=link.e;if(!e.burning||e.failed)continue;
+   const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
+   const x1=GRID_LEFT+a.position.x/STORY_HEIGHT*DX,y1=GROUND_Y-a.position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+b.position.x/STORY_HEIGHT*DX,y2=GROUND_Y-b.position.y/STORY_HEIGHT*STORY_PX;
+   const length=Math.hypot(x2-x1,y2-y1);
+   ctx.save();ctx.lineCap='round';ctx.shadowColor='rgba(255,94,33,.62)';ctx.shadowBlur=4+fireRealism*9;
+   ctx.strokeStyle='rgba(255,92,35,.28)';ctx.lineWidth=(5+fireRealism*5)*fireSize;
+   ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.shadowBlur=0;
+   ctx.strokeStyle='rgba(255,128,48,.42)';ctx.lineWidth=Math.max(2,2.4*fireSize);ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+   const baseCount=clamp(Math.floor(length/25),1,8),count=Math.max(1,Math.min(20,Math.round(baseCount*fireDensity)));
+   for(let i=0;i<count;i++){
+    const t=(i+.5)/count,x=x1+(x2-x1)*t,y=y1+(y2-y1)*t;
+    const phase=sim.time*(8+fireRealism*5)+i*2.1+e.x*.7;
+    const flicker=.55+.45*Math.abs(Math.sin(phase));
+    const h=(5+Math.abs(Math.sin(phase*1.13))*7)*fireSize*(.78+fireRealism*.5);
+    const w=(2.4+Math.abs(Math.cos(phase*.87))*1.6)*fireSize*(.85+fireRealism*.22);
+    const lean=windDirectionSign()*windSpeedRatio()*fireRealism*h*.22+Math.sin(phase*1.7)*h*.12;
+    const outer=ctx.createLinearGradient(x,y+2,x+lean,y-h);
+    outer.addColorStop(0,'#ff4b32');outer.addColorStop(.38,'#ff772f');outer.addColorStop(.76,'#ffc04d');outer.addColorStop(1,'rgba(255,227,137,.82)');
+    ctx.globalAlpha=clamp(.62+.24*flicker,0,1);ctx.fillStyle=outer;
+    ctx.beginPath();ctx.moveTo(x-w*.58,y+2);
+    ctx.bezierCurveTo(x-w*1.65+lean*.12,y-h*.24,x+lean*.42-w*.40,y-h*.67,x+lean*.68,y-h);
+    ctx.bezierCurveTo(x+lean+w*1.20,y-h*.58,x+w*1.25,y-h*.20,x+w*.62,y+2);
+    ctx.closePath();ctx.fill();
+    const innerH=h*(.48+fireRealism*.12),innerW=w*.48;
+    const inner=ctx.createLinearGradient(x,y+1,x+lean*.32,y-innerH);
+    inner.addColorStop(0,'#ffb13f');inner.addColorStop(.65,'#ffe58b');inner.addColorStop(1,'rgba(255,249,202,.86)');
+    ctx.globalAlpha=clamp(.35+fireRealism*.55,0,.92);ctx.fillStyle=inner;
+    ctx.beginPath();ctx.moveTo(x-innerW*.55,y+1);
+    ctx.quadraticCurveTo(x-innerW*.72+lean*.16,y-innerH*.42,x+lean*.3,y-innerH);
+    ctx.quadraticCurveTo(x+innerW*.85,y-innerH*.42,x+innerW*.42,y+1);ctx.closePath();ctx.fill();
+    if(fireRealism>.62){
+     ctx.globalAlpha=(fireRealism-.62)*.62;ctx.fillStyle='#fff6cf';
+     ctx.beginPath();ctx.ellipse(x+lean*.12,y-innerH*.34,Math.max(.45,w*.12),Math.max(.7,innerH*.19),lean*.025,0,Math.PI*2);ctx.fill();
+    }
+   }
+   ctx.restore();
+  }
+  for(const d of sim.debris){
+   if(!d.burning)continue;
+   const x=GRID_LEFT+d.x/STORY_HEIGHT*DX,y=GROUND_Y-d.y/STORY_HEIGHT*STORY_PX,pulse=.6+.4*Math.abs(Math.sin(sim.time*8+d.id));
+   ctx.save();ctx.globalAlpha=clamp(.45+.16*fireDensity,0,.82);ctx.shadowColor='rgba(255,103,37,.65)';ctx.shadowBlur=4+fireRealism*6;
+   ctx.fillStyle='#ff8542';ctx.beginPath();ctx.ellipse(x,y-4,fireSize*(3+pulse*2),fireSize*(5+pulse*4),Math.sin(sim.time*4+d.id)*.12,0,Math.PI*2);ctx.fill();
+   ctx.shadowBlur=0;ctx.fillStyle='#ffe4a0';ctx.globalAlpha=clamp(.3+fireRealism*.5,0,.85);
+   ctx.beginPath();ctx.ellipse(x+Math.sin(sim.time*7+d.id)*.7,y-4,fireSize*1.1,fireSize*(2+pulse),0,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
  }
- for(const d of sim.debris){if(!d.burning)continue;const x=GRID_LEFT+d.x/STORY_HEIGHT*DX,y=GROUND_Y-d.y/STORY_HEIGHT*STORY_PX;ctx.save();ctx.globalAlpha=.75;ctx.fillStyle='#ff8542';ctx.beginPath();ctx.ellipse(x,y-4,3+Math.abs(Math.sin(sim.time*8+d.id))*2,6+Math.abs(Math.cos(sim.time*7+d.id))*3,0,0,Math.PI*2);ctx.fill();ctx.fillStyle='#ffe4a0';ctx.beginPath();ctx.ellipse(x,y-4,1.3,3.2,0,0,Math.PI*2);ctx.fill();ctx.restore()}
  // Primed explosive elements blink before a heat-triggered chain reaction.
  for(const link of sim.memberLinks){const e=link.e;if(!e.explosivePrimed||e.failed)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const x=GRID_LEFT+(a.position.x+b.position.x)*.5/STORY_HEIGHT*DX,y=GROUND_Y-(a.position.y+b.position.y)*.5/STORY_HEIGHT*STORY_PX;ctx.save();ctx.globalAlpha=.5+.5*Math.sin(sim.time*18);ctx.strokeStyle='#ff68ac';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,5+Math.sin(sim.time*12)*2,0,Math.PI*2);ctx.stroke();ctx.restore()}
 }
@@ -1379,23 +1468,23 @@ async function updateMemberPhysics(dt){
  refreshMemberTopology();calculateStability(lastAnalysis||analyzeStructure());
  const previousY=Object.create(null),stability=sim.stability,nodeAssembly=stability.nodeAssembly,byId=stability.byId,snapForces=Object.create(null),nodeDensity=Object.create(null);if(ENVIRONMENT.waterLevel>0&&PHYSICS_MODEL){for(const link of sim.memberLinks){if(link.e.failed)continue;const density=PHYSICS_MODEL.materials[link.e.material]?.density||2,weight=Math.max(.01,link.e.mass);for(const key of [link.nodeA,link.nodeB]){const bucket=nodeDensity[key]||(nodeDensity[key]={mass:0,weighted:0});bucket.mass+=weight;bucket.weighted+=density*weight}}}
  const sagVertical=Object.create(null),spanPulls=Object.create(null);for(const link of sim.memberLinks){const e=link.e;if(e.kind!=='beam'||e.failed)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;if(e.snapped){const center=Number.isFinite(e.snapCenterX)?e.snapCenterX:(a.position.x+b.position.x)*.5,sagFactor=clamp((e.snapSag||0)/(STORY_HEIGHT*.55),0,1),pull=clamp((.48+.34*Math.max(1,e.momentUtilization))*sagFactor,0,2.6);snapForces[link.nodeA]=(snapForces[link.nodeA]||0)+Math.sign(center-a.position.x)*pull;snapForces[link.nodeB]=(snapForces[link.nodeB]||0)+Math.sign(center-b.position.x)*pull;const groupKey=`${e.y}:${e.snapLeft}:${e.snapRight}`,row=spanPulls[groupKey]||(spanPulls[groupKey]={level:e.y,left:e.snapLeft,right:e.snapRight,center,pull:0});row.pull=Math.max(row.pull,clamp((.35+.26*Math.max(1,e.momentUtilization))*sagFactor,0,1.8));continue;}if(!e.sagging||e.sag<.01)continue;const center=(a.position.x+b.position.x)*.5,sagFactor=clamp(e.sag/(STORY_HEIGHT*.34),0,1),pull=clamp(.05+(e.catenaryRatio||0)*.20+sagFactor*.48,0,1.5),vertical=clamp(sagFactor*.18+Math.max(0,e.momentUtilization-.55)*.08+Math.abs(e.sagVelocity||0)*.035,0,.48);snapForces[link.nodeA]=(snapForces[link.nodeA]||0)+Math.sign(center-a.position.x)*pull;snapForces[link.nodeB]=(snapForces[link.nodeB]||0)+Math.sign(center-b.position.x)*pull;sagVertical[link.nodeA]=(sagVertical[link.nodeA]||0)+vertical*.5;sagVertical[link.nodeB]=(sagVertical[link.nodeB]||0)+vertical*.5;const groupKey=`${e.y}:${e.x}`;const row=spanPulls[groupKey]||(spanPulls[groupKey]={level:e.y,left:e.x,right:e.x+1,center,pull:0});row.pull=Math.max(row.pull,pull*.45)}for(const row of Object.values(spanPulls)){for(const x of [row.left,row.right]){const nodeKey=keyOf(x,row.level),n=sim.nodes[nodeKey];if(n)snapForces[nodeKey]=(snapForces[nodeKey]||0)+Math.sign(row.center-n.position.x)*row.pull;}}
- const motionNodes=[];
+ const motionNodes=[],windRatio=windSpeedRatio(),windDirection=windDirectionSign(),windGust=windGustFactor();
  for(const node of Object.values(sim.nodes)){
   previousY[node.key]=node.position.y;
   if(node.referenceLevel===0){node.position.x=node.reference.x;node.position.y=0;node.velocity.x=0;node.velocity.y=0;node.acceleration.x=0;node.acceleration.y=0;continue;}
   const assembly=byId[nodeAssembly[node.key]],dyn=assembly?.dynamics,rotating=!!(dyn&&dyn.isRotating&&assembly.supportPoints.length),directVerticalSupport=hasDirectVerticalSupport(node);
-  const cantileverUtil=node.isGroundConnected&&!directVerticalSupport?cantileverUtilizationAtNode(node):null,cantileverSupported=cantileverUtil!==null,isTetheredNode=gravityTether?.kind==='node'&&gravityTether.nodeKey===node.key,tetherForce=isTetheredNode?springForce(gravityTether.targetX,gravityTether.targetY,node.position.x,node.position.y,node.velocity.x,node.velocity.y,34):{x:0,y:0},nodeSubmerged=ENVIRONMENT.waterLevel>0&&PHYSICS_MODEL?PHYSICS_MODEL.submergedFraction(node.position.y-.10,node.position.y+.10,waterSurfaceWorld()):0,nodeDensityValue=nodeDensity[node.key]?.mass?nodeDensity[node.key].weighted/nodeDensity[node.key].mass:2,nodeBuoyancy=GRAVITY*nodeSubmerged/Math.max(.3,nodeDensityValue),mediumDrag=.018+nodeSubmerged*1.25;
+  const cantileverUtil=node.isGroundConnected&&!directVerticalSupport?cantileverUtilizationAtNode(node):null,cantileverSupported=cantileverUtil!==null,isTetheredNode=gravityTether?.kind==='node'&&gravityTether.nodeKey===node.key,tetherForce=isTetheredNode?springForce(gravityTether.targetX,gravityTether.targetY,node.position.x,node.position.y,node.velocity.x,node.velocity.y,34):{x:0,y:0},nodeSubmerged=ENVIRONMENT.waterLevel>0&&PHYSICS_MODEL?PHYSICS_MODEL.submergedFraction(node.position.y-.10,node.position.y+.10,waterSurfaceWorld()):0,nodeDensityValue=nodeDensity[node.key]?.mass?nodeDensity[node.key].weighted/nodeDensity[node.key].mass:2,nodeBuoyancy=GRAVITY*nodeSubmerged/Math.max(.3,nodeDensityValue),mediumDrag=.018+nodeSubmerged*1.25,windHeight=clamp(node.referenceLevel/Math.max(1,NY),0,1),windAx=windDirection*windRatio*windRatio*windGust*(.16+1.05*windHeight);
   // Keep ordinary two-sided frames pinned to their structural reference unless the node lies
   // on a genuine one-sided overhang. Its spring-like lateral settling still runs through the compute backend.
   if(node.isGroundConnected&&!rotating&&!cantileverSupported&&!isTetheredNode){
-   node.acceleration.x=-2.4*(node.position.x-node.reference.x)-1.15*node.velocity.x+(snapForces[node.key]||0);
+   node.acceleration.x=-2.4*(node.position.x-node.reference.x)-1.15*node.velocity.x+windAx+(snapForces[node.key]||0);
    node.acceleration.y=0;
    motionNodes.push({node,pinned:true,ax:node.acceleration.x,ay:0,alpha:0,damping:1,maxVX:5,maxVY:MAX_FALL_SPEED,maxOmega:3.4});
    continue;
   }
   // A one-sided cantilever gradually gives way under load, then enters full gravity after root failure.
   const cantileverGravity=cantileverSupported?clamp((cantileverUtil-.58)*2.2,0,1):1;
-  node.acceleration.x=-.22*node.velocity.x+(snapForces[node.key]||0)-mediumDrag*node.velocity.x+clamp(tetherForce.x/Math.max(.12,node.mass),-18,18);
+  node.acceleration.x=-.22*node.velocity.x+windAx+(snapForces[node.key]||0)-mediumDrag*node.velocity.x+clamp(tetherForce.x/Math.max(.12,node.mass),-18,18);
   node.acceleration.y=(directVerticalSupport?0:-GRAVITY*cantileverGravity)+nodeBuoyancy-mediumDrag*node.velocity.y-(sagVertical[node.key]||0)+clamp(tetherForce.y/Math.max(.12,node.mass),-18,18);
   if(rotating){
    // Angular acceleration about the surviving pivot contributes tangential acceleration to each joint.
@@ -1889,7 +1978,7 @@ function animate(now){
   if(!physicsStepBusy)void processPhysicsSteps();
   if(!physicsStepBusy&&(frame++%4)===0){refreshAnalysis();updateMetrics()}
   draw();
- }else if(!precalcActive&&!replayTimeline.length){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);draw()}}
+ }else if(!precalcActive&&!replayTimeline.length){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);for(const node of Object.values(sim.nodes)){if(node.referenceLevel>0&&node.isGroundConnected){const sway=sim.lateralDisp[node.referenceLevel]||0;node.position.x=clamp(node.reference.x+sway,0,NX*STORY_HEIGHT)}}draw()}}
  requestAnimationFrame(animate);
 }
 
@@ -1974,6 +2063,22 @@ document.addEventListener('keydown',e=>{if(e.code!=='KeyO'||e.repeat||e.altKey||
 $('qualityPreset')?.addEventListener('change',e=>{const selected=e.target.value;qualityMode=selected==='auto'?'auto':selected;if(selected==='auto'){runPerformanceBenchmark()}else{applyQualityProfile(selected);const status=$('qualityStatus');if(status)status.textContent=`Manual ${QUALITY_PROFILE.label} preset. CPU probe does not override manual quality.`}});
 function applyPhysicsComputeMode(){const mode=$('computeMode')?.value||'auto';window.FrameLabCompute?.setMode(mode);const note=$('computeModeStatus');if(note)note.textContent=mode==='gpu'?'WebGPU performs body motion integration when available; failures fall back to CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='cpu'?'Live body motion integration is computed in the CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='main'?'Live motion integration stays on the main CPU thread. Use this as a compatibility/debug fallback.':'Auto uses the CPU worker unless real integration benchmarks show WebGPU is at least 15% faster; large batches then use GPU. GPU errors fall back to CPU. Structural analysis, contact resolution, and failure rules remain CPU-side.';const sub=$('computeSub');if(sub)sub.textContent=note?.textContent||'CPU/GPU body integration with CPU structural solver';}
 $('computeMode')?.addEventListener('change',applyPhysicsComputeMode);
+function bindEffectSlider(id,key,outId,minFactor,maxFactor){
+ const input=$(id),out=$(outId);if(!input)return;
+ const apply=()=>{const percent=Number(input.value);EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);if(out)out.textContent=`${Math.round(percent)}%`;draw()};
+ input.addEventListener('input',apply);apply();
+}
+[
+ ['fireRealism','fireRealism','fireRealismOut',0,1],
+ ['fireDensity','fireDensity','fireDensityOut',0,2],
+ ['fireSize','fireSize','fireSizeOut',.5,2],
+ ['dustRealism','dustRealism','dustRealismOut',0,1],
+ ['dustDensity','dustDensity','dustDensityOut',0,2],
+ ['dustSize','dustSize','dustSizeOut',.5,2.5],
+ ['smokeRealism','smokeRealism','smokeRealismOut',0,1],
+ ['smokeDensity','smokeDensity','smokeDensityOut',0,2],
+ ['smokeSize','smokeSize','smokeSizeOut',.5,2.5]
+].forEach(([id,key,out,min,max])=>bindEffectSlider(id,key,out,min,max));
 $('surfaceMoisture')?.addEventListener('input',e=>{ENVIRONMENT.moisture=clamp(Number(e.target.value)/100,0,1);$('moistureOut').textContent=`${Math.round(ENVIRONMENT.moisture*100)}%`;draw()});
 $('waterLevel')?.addEventListener('input',e=>{ENVIRONMENT.waterLevel=clamp(Number(e.target.value)/100,0,1);$('waterOut').textContent=ENVIRONMENT.waterLevel===0?'Dry':`${Math.round(ENVIRONMENT.waterLevel*100)}% height`;draw()});
 $('windSpeed')?.addEventListener('input',e=>{ENVIRONMENT.windSpeed=clamp(Number(e.target.value)||0,0,100);const out=$('windOut');if(out)out.textContent=ENVIRONMENT.windSpeed===0?'0 km/h · Calm':`${Math.round(ENVIRONMENT.windSpeed)} km/h`;refreshAnalysis();draw()});
