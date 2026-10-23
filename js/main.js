@@ -27,8 +27,8 @@ function windLoadForMember(kind,e){
 function updateLateralSway(dt){
  const step=clamp(Number(dt)||0,0,.05);if(step<=0)return;
  const old=Array.from(sim.lateralDisp),speed=windSpeedRatio(),direction=windDirectionSign(),gust=windGustFactor();
- // Scale the per-story forcing with grid height so a 300-level model remains bounded.
- // Wind is scaled by relative height, not total grid height.
+ // Wind is normalized by relative height so taller structures still receive a
+ // meaningful force without multiplying it unboundedly by the number of stories.
  for(let level=1;level<=NY;level++){
   const below=old[level-1]-old[level],above=level<NY?old[level+1]-old[level]:0;
   const windAx=direction*speed*speed*(.18+1.05*level/Math.max(1,NY))*gust;
@@ -520,19 +520,19 @@ function emitFireSmoke(dt){
  for(const link of sim.memberLinks){
   const e=link.e;if(!e.burning||e.failed)continue;
   const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
-  e.smokeEmissionClock=Math.min((e.smokeEmissionClock||0)+dt,.5);
+  e.smokeEmissionClock=Math.min((e.smokeEmissionClock||0)+dt,1.5);
   sources.push({kind:'member',e,a,b,baseInterval:.112+(Math.abs(Number(e.x)||0)%3)*.009});
  }
  for(const d of sim.debris){
   if(!d.burning)continue;
-  d.smokeEmissionClock=Math.min((d.smokeEmissionClock||0)+dt,.5);
+  d.smokeEmissionClock=Math.min((d.smokeEmissionClock||0)+dt,1.5);
   sources.push({kind:'debris',e:d,d,baseInterval:.13});
  }
  const fireCount=sources.length;
  const smokeDensity=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,2);
  sim.fireSmokeSourceCount=fireCount;
  sim.fireSmokeScale=clamp(1+Math.max(0,fireCount-1)*.12,1,2.8);
- if(!fireCount||smokeDensity<=0){sim.smokeEmissionCursor=0;return}
+ if(!fireCount||smokeDensity<=0){for(const source of sources)source.e.smokeEmissionClock=0;sim.smokeEmissionCursor=0;return}
  const intervalBoost=clamp(1+(sim.fireSmokeScale-1)*.35,1,1.65);
  const due=[];
  for(const source of sources){source.interval=source.baseInterval/(intervalBoost*Math.max(.08,smokeDensity));if(source.e.smokeEmissionClock>=source.interval)due.push(source)}
