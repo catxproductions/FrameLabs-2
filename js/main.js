@@ -459,7 +459,9 @@ function addAtmosphericParticle(particle){
 
  // Keep a strict per-quality-preset cap. Fire intensity affects puff size and
  // emission rate, but must never silently raise the memory/performance budget.
- const limit=Math.min(1800,Math.floor(qualityBudget));
+ const visualDensity=Math.max(Number(EFFECT_SETTINGS.dustDensity)||0,Number(EFFECT_SETTINGS.smokeDensity)||0);
+ const densityExpansion=clamp(visualDensity/2,1,5);
+ const limit=Math.min(3000,Math.floor(qualityBudget*densityExpansion));
  while(particles.length>=limit){
   // Prefer retaining fresh, impact-driven dust while trimming the oldest visual-only particles.
   let removeAt=0,oldest=-Infinity;
@@ -2081,7 +2083,7 @@ function applyPhysicsComputeMode(){const mode=$('computeMode')?.value||'auto';wi
 $('computeMode')?.addEventListener('change',applyPhysicsComputeMode);
 function bindEffectSlider(id,key,outId,minFactor,maxFactor){
  const input=$(id),out=$(outId);if(!input)return;
- const apply=()=>{const percent=Number(input.value),isZero=percent<=0;EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);input.classList.toggle('is-zero-disabled',isZero);input.setAttribute('aria-valuetext',isZero?'Disabled':String(Math.round(percent))+'%');const field=input.closest('.field');field?.classList.toggle('effect-control-disabled',isZero);if(out){out.textContent=isZero?'Disabled':String(Math.round(percent))+'%';out.setAttribute('aria-live','polite')}draw()};
+ const apply=()=>{const percent=Number(input.value),isZero=percent<=0;EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);input.classList.toggle('is-zero-disabled',isZero);input.setAttribute('aria-valuetext',isZero?'Disabled':String(Math.round(percent))+'%');const field=input.closest('.field');field?.classList.toggle('effect-control-disabled',isZero);if(isZero&&(key==='dustDensity'||key==='dustSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='dust');if(isZero&&(key==='smokeDensity'||key==='smokeSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='smoke');if(out){out.textContent=isZero?'Disabled':String(Math.round(percent))+'%';out.setAttribute('aria-live','polite')}draw()};
  input.addEventListener('input',apply);apply();
 }
 [
