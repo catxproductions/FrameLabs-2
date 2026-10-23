@@ -1822,11 +1822,87 @@ function registerImportedMaterials(payload) {
  const pendingMaterials = [];
 
  // Validate and prepare the entire list first, before adding anything to the game.
- for (const [id, saved] of Object.entries(incomingMaterials)) {
-  // Never let a design overwrite definitions already trusted by the current game.
-  if (MATERIALS[id]) continue;
+ const builtInMaterialIds = new Set([
+  'steel',
+  'concrete',
+  'wood',
+  'flammable',
+  'explosive'
+ ]);
 
+ function sameMaterialDefinition(current, saved, savedImpact) {
+  const textProperties = ['label', 'color'];
+  const numberProperties = [
+   'density',
+   'staticFriction',
+   'dynamicFriction',
+   'restitution',
+   'wetSensitivity',
+   'elasticity',
+   'heatWeakening',
+   'heatSensitivity'
+  ];
+
+  for (const property of textProperties) {
+   if (current[property] !== saved[property]) return false;
+  }
+
+  for (const property of numberProperties) {
+   if (Number(current[property]) !== Number(saved[property])) return false;
+  }
+
+  const savedFlammable = typeof saved.isFlamable === 'boolean'
+   ? saved.isFlamable
+   : typeof saved.isFlammable === 'boolean'
+    ? saved.isFlammable
+    : false;
+
+  if (
+   current.isExplosive !== (saved.isExplosive === true) ||
+   current.isFlamable !== savedFlammable
+  ) {
+   return false;
+  }
+
+  for (const kind of ['column', 'beam', 'slab', 'brace']) {
+   if (
+    Number(current[kind]?.mass) !== Number(saved[kind]?.mass) ||
+    Number(current[kind]?.capacity) !== Number(saved[kind]?.capacity)
+   ) {
+    return false;
+   }
+
+   if (savedImpact && Number(IMPACT_RESISTANCE[id]?.[kind]) !== Number(savedImpact[kind])) {
+    return false;
+   }
+  }
+
+  return true;
+ }
+
+ for (const [id, saved] of Object.entries(incomingMaterials)) {
   if (!/^[a-z][a-z0-9_-]*$/.test(id)) {
+   throw new Error('The design contains an invalid custom material id: "' + id + '".');
+  }
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+   throw new Error('The saved settings for material "' + id + '" are invalid.');
+  }
+
+  // Built-ins are always kept from the current game. Existing custom IDs are
+  // accepted only when their settings match, avoiding a silent physics mismatch.
+  if (MATERIALS[id]) {
+   if (builtInMaterialIds.has(id)) continue;
+
+   if (!sameMaterialDefinition(MATERIALS[id], saved, incomingImpact[id])) {
+    throw new Error(
+     'Custom material "' + id + '" already exists with different settings. ' +
+     'Use a unique id or make its entry in materials.js match the imported design.'
+    );
+   }
+   continue;
+  }
+
+  if (pendingMaterials.length >= 100) {
    throw new Error('The design contains an invalid custom material id: "' + id + '".');
   }
   if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
