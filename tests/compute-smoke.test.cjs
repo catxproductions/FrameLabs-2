@@ -369,6 +369,7 @@ test('collapse dust and fire smoke particles animate in world space and respect 
   api.spawnDustPlume(2, 3, 1.4, 0.8, 0.2);
   assert.ok(state.atmosphericParticles.length >= 15, 'a structural failure emits a multi-particle dust plume');
   assert.ok(state.atmosphericParticles.every(p => p.kind === 'dust' && Number.isFinite(p.x + p.y + p.vx + p.vy)), 'dust particles hold finite world-space state');
+  assert.ok(state.atmosphericParticles.every(p => p.vy > 0.45), 'dust particles launch upwards with visible lift');
   const particle = state.atmosphericParticles[0];
   const initialX = particle.x, initialAge = particle.age;
   api.updateAtmosphericParticles(.05);
@@ -376,7 +377,7 @@ test('collapse dust and fire smoke particles animate in world space and respect 
   assert.notEqual(particle.x, initialX, 'particles drift independently of the physics substep');
   api.spawnSmokePuff(1, 2, 0, 0, 1);
   const smoke = state.atmosphericParticles.find(p => p.kind === 'smoke');
-  assert.ok(smoke && smoke.vy > 0 && smoke.growth > 0, 'flame smoke rises and expands');
+  assert.ok(smoke && smoke.vy > 0.65 && smoke.growth > 0, 'smoke rises strongly and expands');
   state.memberLinks.push({ id: 'columns|0,0', nodeA: 'a', nodeB: 'b', e: { burning: true, failed: false, x: 0, smokeEmissionClock: 0 } });
   state.nodes.a = { position: { x: 1, y: 2 }, velocity: { x: 0, y: 0 } };
   state.nodes.b = { position: { x: 2, y: 2 }, velocity: { x: 0, y: 0 } };
@@ -406,6 +407,19 @@ test('fire, dust, and smoke expose live visual sliders with valid setting bindin
     assert.match(js, new RegExp(`'${id}','${id}','${id}Out'`), `${id} updates a live setting`);
   }
   assert.match(js, /const EFFECT_SETTINGS=\{fireRealism:/);
+  assert.ok(js.includes("input.classList.toggle('is-zero-disabled',isZero)"), 'zero values gray out their slider');
+  assert.ok(js.includes("out.textContent=isZero?'Disabled':String(Math.round(percent))+'%'"), 'zero values show Disabled in the readout');
+  assert.ok(js.includes("const rawFireSize=Number(EFFECT_SETTINGS.fireSize),fireSize=clamp(Number.isFinite(rawFireSize)?rawFireSize:1,0,10)"), 'zero flame size turns flame drawing off');
+  const css = read('css/styles.css');
+  assert.ok(css.includes('.effect-control-disabled input[type="range"]'), 'zeroed sliders use disabled styling but remain interactive');
+  for (const id of ['fireDensity','fireSize','dustDensity','smokeDensity']) {
+    assert.match(html, new RegExp(`id="${id}" type="range" min="0" max="1000"`), `${id} reaches five times its old maximum`);
+  }
+  for (const id of ['dustSize','smokeSize']) {
+    assert.match(html, new RegExp(`id="${id}" type="range" min="0" max="1250"`), `${id} reaches five times its old maximum`);
+  }
+  assert.match(js, /source\.e\.smokeEmissionClock=accumulated-available\*source\.interval/);
+  assert.match(js, /due\.length<240/, 'smoke emission budget is extended fivefold');
   assert.match(js, /const realism=clamp\(Number\(EFFECT_SETTINGS\[p\.kind==='smoke'\?'smokeRealism':'dustRealism'\]\)/);
 });
 
