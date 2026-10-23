@@ -257,7 +257,85 @@ function braceKeyOf(x,y,direction='up'){return `${x},${y},${direction}`}
 function memberGroupForKind(kind){return ({column:'columns',beam:'beams',slab:'slabs',brace:'braces'})[kind]||'beams'}
 function memberKeyFor(group,e){return group==='braces'?braceKeyOf(e.x,e.y,e.direction||'up'):keyOf(e.x,e.y)}
 function gridPositionForKind(px,py,kind){if(kind==='column')return snapColumn(px,py);if(kind==='brace'||kind==='crossbrace')return snapBrace(px,py);return snapBay(px,py)}
-function makeElement(kind,x,y,material){const p=MATERIALS[material][kind],impactResistance=IMPACT_RESISTANCE[material][kind];return {x,y,kind,material,mass:p.mass,capacity:p.capacity,yieldStrength:p.capacity,momentCapacity:kind==='beam'?p.capacity*.50:0,impactResistance,durability:p.capacity*impactResistance*IMPACT_ENERGY_PER_CAPACITY,bendingMoment:0,momentUtilization:0,effectiveSpan:1,momentOverloadTime:0,sag:0,sagVelocity:0,plasticSag:0,sagging:false,catenaryTension:0,catenaryRatio:0,connectionFactor:1,jointDamageA:0,jointDamageB:0,plasticMoment:0,snapped:false,shattered:false,snapSag:0,snapVelocity:0,snapAge:0,snapCenterX:null,impactDamage:0,impactDeformation:0,elasticDeformation:0,plasticDeformation:0,lastImpactEnergy:0,impactStress:0,lastImpactTime:-Infinity,integrity:1,structuralIntegrity:1,failed:false,demand:0,utilization:0,unsupported:false,isLoaded:false,isStressed:false,connections:[],angle:0,strain:0,tiltAngle:0,lateralForce:0,direction:kind==='brace'?'up':undefined,fractureCount:0,burning:false,fuelRemaining:isFlammableMaterial(material)?1:0,heatExposure:0,thermalDamage:0,fireSpreadClock:0,burnTime:0,smokeEmissionClock:0,ignitionReason:'',explosivePrimed:false,detonated:false,chainDepth:0}}
+function makeElement(kind, x, y, material) {
+ const component = MATERIALS[material]?.[kind];
+ const impactResistance = IMPACT_RESISTANCE[material]?.[kind];
+
+ if (!component || !Number.isFinite(impactResistance)) {
+  throw new Error('Cannot create ' + kind + ': material "' + material + '" is not fully registered.');
+ }
+
+ return {
+  x,
+  y,
+  kind,
+  material,
+  mass: component.mass,
+  capacity: component.capacity,
+  yieldStrength: component.capacity,
+  momentCapacity: kind === 'beam' ? component.capacity * 0.50 : 0,
+  impactResistance,
+  durability: component.capacity * impactResistance * IMPACT_ENERGY_PER_CAPACITY,
+
+  bendingMoment: 0,
+  momentUtilization: 0,
+  effectiveSpan: 1,
+  momentOverloadTime: 0,
+  sag: 0,
+  sagVelocity: 0,
+  plasticSag: 0,
+  sagging: false,
+  catenaryTension: 0,
+  catenaryRatio: 0,
+  connectionFactor: 1,
+  jointDamageA: 0,
+  jointDamageB: 0,
+  plasticMoment: 0,
+
+  snapped: false,
+  shattered: false,
+  snapSag: 0,
+  snapVelocity: 0,
+  snapAge: 0,
+  snapCenterX: null,
+  impactDamage: 0,
+  impactDeformation: 0,
+  elasticDeformation: 0,
+  plasticDeformation: 0,
+  lastImpactEnergy: 0,
+  impactStress: 0,
+  lastImpactTime: -Infinity,
+
+  integrity: 1,
+  structuralIntegrity: 1,
+  failed: false,
+  demand: 0,
+  utilization: 0,
+  unsupported: false,
+  isLoaded: false,
+  isStressed: false,
+  connections: [],
+  angle: 0,
+  strain: 0,
+  tiltAngle: 0,
+  lateralForce: 0,
+  direction: kind === 'brace' ? 'up' : undefined,
+  fractureCount: 0,
+
+  // Behavior is driven by materials.js flags, not a hard-coded material name.
+  burning: false,
+  fuelRemaining: isFlammableMaterial(material) ? 1 : 0,
+  heatExposure: 0,
+  thermalDamage: 0,
+  fireSpreadClock: 0,
+  burnTime: 0,
+  smokeEmissionClock: 0,
+  ignitionReason: '',
+  explosivePrimed: false,
+  detonated: false,
+  chainDepth: 0
+ };
+}
 function resetPhysics(restoreMembers=false){dragging=false;lastDragKey='';lastDragPt=null;gravityTether=null;sim=newPhysicsState();if(!restoreMembers){sim.connectionStates=Object.create(null)}if(restoreMembers){sim.connectionStates=Object.create(null);for(const {e} of allMembers()){e.integrity=1;e.structuralIntegrity=1;e.failed=false;e.snapped=false;e.shattered=false;e.snapSag=0;e.snapVelocity=0;e.snapAge=0;e.snapCenterX=null;e.momentOverloadTime=0;e.bendingMoment=0;e.momentUtilization=0;e.effectiveSpan=1;e.sag=0;e.sagVelocity=0;e.plasticSag=0;e.sagging=false;e.catenaryTension=0;e.catenaryRatio=0;e.connectionFactor=1;e.jointDamageA=0;e.jointDamageB=0;e.plasticMoment=0;e.tiltAngle=0;e.lateralForce=0;e.impactDamage=0;e.impactDeformation=0;e.elasticDeformation=0;e.plasticDeformation=0;e.impactStress=0;e.lastImpactEnergy=0;e.lastImpactTime=-Infinity;e.debrisSpawned=false;e.failureReason='';e.state='intact';e.demand=0;e.utilization=0;e.unsupported=false;e.isFreefalling=false;e.dynamicUtilization=0;e.burning=false;e.fuelRemaining=isFlammableMaterial(e.material)?1:0;e.heatExposure=0;e.thermalDamage=0;e.fireSpreadClock=0;e.burnTime=0;e.smokeEmissionClock=0;e.ignitionReason='';e.explosivePrimed=false;e.detonated=false;e.chainDepth=0}for(const l of Object.values(BuildingMap.loads)){l.integrity=1;l.failed=false}}sim.running=false;syncButtons();refreshAll()}
 function screenX(x,level=0){const node=sim.nodes[keyOf(x,level)];const worldX=node?node.position.x/STORY_HEIGHT:x;return GRID_LEFT+worldX*DX+sim.lateralDisp[Math.max(0,Math.min(NY,level))]*23}
 function screenYNode(x,level){const node=sim.nodes[keyOf(x,level)];const worldY=node?node.position.y:level*STORY_HEIGHT;return GROUND_Y-(worldY/STORY_HEIGHT)*STORY_PX}
@@ -693,23 +771,58 @@ function demolishAt(px,py){const found=nearestElement(px,py);if(!found||found.di
 function breakAt(px,py){const found=nearestElement(px,py);if(!found||found.distance>20){lastDragKey='';return false}const signature=found.group+'|'+found.key;if(lastDragKey===signature)return false;lastDragKey=signature;if(!['columns','beams','slabs','braces'].includes(found.group)){setStatus(found.group==='debris'?'That piece is already loose. Use the tether or Destroy tool on debris.':'Break targets structural members. Use Destroy to remove loads or other objects.',true);return false}const link=sim.memberLinks.find(l=>l.id===`${found.group}|${found.key}`);if(!link||link.e.failed||link.e.debrisSpawned){setStatus('That member is already broken or has no active physical connection.',true);return false}if(!failMember(link,'manual fracture tool')){setStatus('That member could not be fractured.',true);return false}sim.running=true;syncButtons();mutateLayout(`BROKE ${link.e.kind.toUpperCase()} at ${found.key}. The member split into loose fragments; use Destroy to delete objects instead.`);return true}
 function pushAt(x,y,px){const dir=px<(GRID_LEFT+GRID_RIGHT)/2?-1:1;for(let level=Math.max(1,y);level<=NY;level++){const attenuation=Math.max(.35,1-(level-y)*.075);sim.lateralVel[level]+=dir*4.4*attenuation}for(const node of Object.values(sim.nodes))if(node.referenceLevel>=Math.max(1,y)&&!node.isGroundConnected)node.velocity.x+=dir*1.1;sim.running=true;syncButtons();setStatus(`Lateral impulse applied ${dir<0?'left':'right'} at level ${y}.`,true);updateMetrics()}
 function distanceToWorldSegment(px,py,a,b){const dx=b.x-a.x,dy=b.y-a.y,den=dx*dx+dy*dy,t=den?clamp(((px-a.x)*dx+(py-a.y)*dy)/den,0,1):0;return Math.hypot(px-(a.x+t*dx),py-(a.y+t*dy))}
-function igniteMember(link,reason='heat'){
- if(!link||!link.e||!isFlammableMaterial(link.e.material)||link.e.failed||link.e.burning)return false;
- const e=link.e;e.burning=true;e.fuelRemaining=clamp(Number(e.fuelRemaining??1),.05,1);e.heatExposure=0;e.thermalDamage=0;e.fireSpreadClock=0;e.burnTime=0;e.ignitionReason=reason;e.lastEventTime=sim.time;
- sim.lastEvent=`IGNITION · ${e.kind.toUpperCase()} · ${reason.toUpperCase()}`;sim.eventUntil=sim.time+2.6;return true;
+function igniteMember(link, reason = 'heat') {
+ if (!link || !link.e) return false;
+
+ const element = link.e;
+ if (!isFlammableMaterial(element.material) || element.failed || element.burning) {
+  return false;
+ }
+
+ element.burning = true;
+ element.fuelRemaining = clamp(Number(element.fuelRemaining ?? 1), 0.05, 1);
+ element.heatExposure = 0;
+ element.thermalDamage = 0;
+ element.fireSpreadClock = 0;
+ element.burnTime = 0;
+ element.ignitionReason = reason;
+ element.lastEventTime = sim.time;
+
+ sim.lastEvent = 'IGNITION · ' + element.kind.toUpperCase() + ' · ' + reason.toUpperCase();
+ sim.eventUntil = sim.time + 2.6;
+ return true;
 }
 function queueMaterialBlastAt(x,y,power,sourceId='',depth=0,reason='explosive composite'){
  if(sim.pendingMaterialBlasts.length===0&&(sim.chainExplosionsProcessed||0)>=16)sim.chainExplosionsProcessed=0;
  if(depth>MAX_CHAIN_REACTION_DEPTH||sim.pendingMaterialBlasts.length>=24)return false;
  sim.pendingMaterialBlasts.push({x,y,power:clamp(Number(power)||4,1.8,9),sourceId,depth,reason});return true;
 }
-function triggerExplosiveMember(link,power,depth=0,reason='heat or impact'){
- if(!link||!link.e||!isExplosiveMaterial(link.e.material)||link.e.detonated||link.e.failed||depth>=MAX_CHAIN_REACTION_DEPTH)return false;
- const e=link.e,a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)return false;
- const x=(a.position.x+b.position.x)*.5,y=(a.position.y+b.position.y)*.5;e.detonated=true;e.explosivePrimed=false;e.burning=false;e.chainDepth=depth+1;
- queueMaterialBlastAt(x,y,power,link.id,depth+1,reason);
- failMember(link,`EXPLOSIVE COMPOSITE DETONATION · ${reason}`);
- sim.lastEvent=`CHAIN REACTION · EXPLOSIVE ${e.kind.toUpperCase()}`;sim.eventUntil=sim.time+3.2;return true;
+function triggerExplosiveMember(link, power, depth = 0, reason = 'heat or impact') {
+ if (!link || !link.e) return false;
+
+ const element = link.e;
+ if (!isExplosiveMaterial(element.material) || element.detonated || element.failed || depth >= MAX_CHAIN_REACTION_DEPTH) {
+  return false;
+ }
+
+ const nodeA = sim.nodes[link.nodeA];
+ const nodeB = sim.nodes[link.nodeB];
+ if (!nodeA || !nodeB) return false;
+
+ const centerX = (nodeA.position.x + nodeB.position.x) * 0.5;
+ const centerY = (nodeA.position.y + nodeB.position.y) * 0.5;
+
+ element.detonated = true;
+ element.explosivePrimed = false;
+ element.burning = false;
+ element.chainDepth = depth + 1;
+
+ queueMaterialBlastAt(centerX, centerY, power, link.id, depth + 1, reason);
+ failMember(link, 'EXPLOSIVE COMPOSITE DETONATION · ' + reason);
+
+ sim.lastEvent = 'CHAIN REACTION · EXPLOSIVE ' + element.kind.toUpperCase();
+ sim.eventUntil = sim.time + 3.2;
+ return true;
 }
 function applyRadialBlastWorld(cx,cy,power,options={}){
  power=clamp(Number(power)||4,1,10);const depth=clamp(Number(options.depth)||0,0,MAX_CHAIN_REACTION_DEPTH),radius=(1.05+power*.22)*STORY_HEIGHT;
@@ -745,18 +858,28 @@ function applyRadialBlastWorld(cx,cy,power,options={}){
 function processPendingMaterialBlasts(maxPerStep=2){let processed=0;while(sim.pendingMaterialBlasts.length&&processed<maxPerStep&&(sim.chainExplosionsProcessed||0)<16){const blast=sim.pendingMaterialBlasts.shift();applyRadialBlastWorld(blast.x,blast.y,blast.power,{internal:true,depth:blast.depth,sourceId:blast.sourceId,reason:blast.reason});processed++}if((sim.chainExplosionsProcessed||0)>=16&&sim.pendingMaterialBlasts.length){sim.pendingMaterialBlasts.length=0;sim.lastEvent='CHAIN REACTION CAPPED · MAXIMUM SAFE SIMULATION DEPTH';sim.eventUntil=sim.time+3}}
 // Cumulative heat weakens members connected to an active fire even if they have not ignited.
 // Rates are illustrative game units; lower values make steel/concrete tolerate heat longer.
-function applyHeatWeakening(link,intensity=1){
- if(!link||!link.e||link.e.failed)return false;
- const material=MATERIALS[e.material]||{};
- const prior=clamp(Number(e.thermalDamage)||0,0,1);
- const rate=Math.max(0,Number(material.heatWeakening)||.004);
- const materialSensitivity=Math.max(0,Number(material.heatSensitivity)||1);
- const delta=rate*clamp(Number(intensity)||1,.1,1.5)*(1-prior*.42);
- e.thermalDamage=clamp(prior+delta,0,1);
+function applyHeatWeakening(link, intensity = 1) {
+ if (!link || !link.e || link.e.failed) return false;
+
+ const element = link.e;
+ const material = MATERIALS[element.material] || {};
+ const previousDamage = clamp(Number(element.thermalDamage) || 0, 0, 1);
+ const weakeningRate = Math.max(0, Number(material.heatWeakening) || 0.004);
+ const heatSensitivity = Math.max(0, Number(material.heatSensitivity) || 1);
+ const amount = weakeningRate
+  * clamp(Number(intensity) || 1, 0.1, 1.5)
+  * (1 - previousDamage * 0.42);
+
+ element.thermalDamage = clamp(previousDamage + amount, 0, 1);
  // Integrity is the solver's existing remaining-strength multiplier, so this weakens all load checks.
- e.integrity=clamp(e.integrity-delta*materialSensitivity,0,1);e.structuralIntegrity=e.integrity;
- e.impactStress=clamp((e.impactStress||0)+delta*.45,0,5);
- if(e.integrity<=FAILURE_INTEGRITY){failMember(link,'THERMAL WEAKENING · FIRE EXPOSURE');return false}
+ element.integrity = clamp(element.integrity - amount * heatSensitivity, 0, 1);
+ element.structuralIntegrity = element.integrity;
+ element.impactStress = clamp((element.impactStress || 0) + amount * 0.45, 0, 5);
+
+ if (element.integrity <= FAILURE_INTEGRITY) {
+  failMember(link, 'THERMAL WEAKENING · FIRE EXPOSURE');
+  return false;
+ }
  return true;
 }
 function updateMaterialHazards(dt){
