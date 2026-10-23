@@ -340,12 +340,12 @@
   }
 
   function projectConstraintsWorker(nodes, edges, iterations) {
-    if (!worker) return Promise.resolve(projectConstraintsCPU(nodes, edges, iterations));
+    if (!worker) return Promise.resolve({ data: projectConstraintsCPU(nodes, edges, iterations), backend: 'Main-thread CPU fallback' });
     const id = ++sequence;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve: (message) => {
         if (!message || !(message.data instanceof ArrayBuffer)) { reject(new Error('CPU worker returned an invalid constraint result')); return; }
-        resolve(new Float64Array(message.data));
+        resolve({ data: new Float64Array(message.data), backend: message.backend || 'CPU worker constraints' });
       }, reject });
       try {
         const nodeCopy = new Float64Array(nodes), edgeCopy = new Float64Array(edges);
@@ -353,7 +353,7 @@
       } catch (error) { pending.delete(id); reject(error); }
     }).catch((error) => {
       if (worker) disableWorker(error);
-      return projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations);
+      return { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), backend: 'Main-thread CPU fallback' };
     });
   }
 
@@ -363,27 +363,34 @@
     }
     for (let i = 0; i < nodes.length; i++) if (!Number.isFinite(nodes[i])) nodes[i] = 0;
     for (let i = 0; i < edges.length; i++) if (!Number.isFinite(edges[i])) edges[i] = 0;
-    const result = physicsMode === 'main'
-      ? projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations)
+    const hadWebGPU = physicsBackend.includes('WebGPU');
+    const workerResult = physicsMode === 'main'
+      ? { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), backend: 'Main-thread CPU' }
       : await projectConstraintsWorker(nodes, edges, iterations);
     if (physicsMode === 'main') physicsBackend = 'Main-thread CPU';
     else if (!worker) physicsBackend = 'Main-thread CPU fallback';
-    else if (physicsBackend.includes('WebGPU')) physicsBackend = 'WebGPU integration + CPU worker constraints';
+    else if (hadWebGPU) physicsBackend = workerResult.backend.includes('C++ WebAssembly')
+      ? 'WebGPU integration + C++ WebAssembly constraints'
+      : 'WebGPU integration + CPU worker constraints';
+    else if (workerResult.backend.includes('C++ WebAssembly')) physicsBackend = 'C++ WebAssembly integration + constraints (CPU worker)';
     else physicsBackend = 'CPU worker integration + CPU constraints';
     backend = physicsBackend;
     setStatus(physicsBackend);
-    return result;
+    return workerResult.data;
   }
 
   function integrateWorker(packed, dt) {
-    if (!worker) return Promise.resolve(integrateCPU(packed, dt));
+    if (!worker) return Promise.resolve({ data: integrateCPU(packed, dt), backend: 'Main-thread CPU fallback' });
     const id = ++sequence;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve: (data) => {
         if (!data || !(data.data instanceof ArrayBuffer || ArrayBuffer.isView(data.data))) {
           reject(new Error('CPU worker returned an invalid physics result')); return;
         }
-        resolve(data.data instanceof ArrayBuffer ? new Float32Array(data.data) : new Float32Array(data.data));
+        resolve({
+          data: data.data instanceof ArrayBuffer ? new Float32Array(data.data) : new Float32Array(data.data),
+          backend: data.backend || 'CPU worker physics'
+        });
       }, reject });
       try {
         const payload = new Float32Array(packed);
@@ -391,7 +398,7 @@
       } catch (error) { pending.delete(id); reject(error); }
     }).catch((error) => {
       if (worker) disableWorker(error);
-      return integrateCPU(new Float32Array(packed), dt);
+      return { data: integrateCPU(new Float32Array(packed), dt), backend: 'Main-thread CPU fallback' };
     });
   }
 
@@ -421,8 +428,9 @@
       setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
       return { data: result, backend: physicsBackend };
     }
-    const result = await integrateWorker(packed, dt);
-    physicsBackend = worker ? 'CPU worker physics' : 'Main-thread CPU fallback';
+    const workerResult = await integrateWorker(packed, dt);
+    const result = workerResult.data;
+    physicsBackend = workerResult.backend;
     backend = physicsBackend;
     setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
     return { data: result, backend: physicsBackend };

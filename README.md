@@ -56,3 +56,19 @@ npm run check
 ```
 
 The tests check example JSON integrity, asset and script load order, worker URLs, material flags and custom-material registration/inheritance, material-definition JSON serialization, CPU-worker diagnostic and live body-integration math, CPU member-constraint projection, selectable CPU fallback, backend wiring into both node and debris motion, GPU-unavailable handling, fixed-step/UI wiring, nonlinear contact response, submersion/buoyancy, quality selection, moisture shading, dust/smoke particle lifetime and caps, and particle-render/event wiring. These automated tests do not replace an interactive browser/hardware test of the complete game.
+
+
+## Experimental C++/WebAssembly physics kernel
+
+FrameLabs 2 has an optional C++ module compiled to WebAssembly for body integration and structural-link constraint projection. It runs inside the existing CPU Web Worker. Structural load analysis, materials, collisions, damage, fire spread, and collapse decisions remain in JavaScript; this is an incremental compute backend, not a full physics-engine replacement.
+
+The constraint kernel mirrors the ordered Gauss-Seidel calculations already used by the JavaScript worker so both paths can be compared before changing solver behavior. JavaScript worker implementations remain available if WebAssembly is missing, fails to load, or cannot allocate enough memory. WebAssembly threads are not required.
+
+Rebuild the browser asset with Clang and LLD installed:
+
+```sh
+npm run build:wasm
+npm run check
+```
+
+GitHub Actions builds and commits the compiled `js/physics-core.wasm` asset to the branch after the regression suite passes. Browser performance still needs to be benchmarked before increasing solver iterations or making C++ the only backend; WebAssembly does not guarantee a speedup for every structure size.

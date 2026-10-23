@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -25,5 +25,23 @@ jobs:
         with:
           node-version: 20
 
-      - name: Check JavaScript syntax and run tests
+      - name: Install C++ WebAssembly toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang lld
+
+      - name: Build C++ physics kernel and run syntax/regression tests
         run: npm run check
+
+      - name: Commit generated Wasm artifact to the branch
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add js/physics-core.wasm
+          if git diff --cached --quiet; then
+            echo "Wasm artifact is already up to date."
+            exit 0
+          fi
+          git commit -m "Build C++ physics WebAssembly artifact"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
