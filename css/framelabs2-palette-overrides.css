@@ -1,0 +1,106 @@
+/* FrameLabs 2 — modern industrial / game-inspired palette
+   Append this file's contents to the END of css/styles.css.
+   Preserves simulation heatmap/status meanings while restyling the UI. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0f141b;
+  --panel: #171e27;
+  --panel2: #202a36;
+  --line: #354252;
+  --ink: #e7edf4;
+  --muted: #9ba9b9;
+  --cyan: #48d8c9;
+  --blue: #77afff;
+  --gold: #f2c978;
+  --red: #ff6b7f;
+  --surface-raised: #222d3a;
+  --surface-input: #1a2430;
+  --border-strong: #435368;
+  --focus: #67e2d6;
+  --positive: #58d9b0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+body {
+  background: radial-gradient(ellipse at 14% -18%, rgba(77, 126, 156, .14), transparent 45%),
+              linear-gradient(180deg, #0f141b, #0c1117);
+  color: var(--ink);
+}
+
+.panel, .stage, .readout, .notice {
+  border-color: var(--line);
+  background: linear-gradient(160deg, rgba(24, 32, 43, .98), rgba(17, 24, 33, .98));
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .20);
+}
+.panel { background: linear-gradient(160deg, #181f2a, #141b24); }
+.group { background: rgba(10, 15, 22, .16); border-color: rgba(129, 151, 173, .18); }
+label, .dimension-controls label { color: #cbd5e1; }
+
+select, button, input {
+  color: var(--ink);
+  background-color: var(--surface-input);
+  border-color: #3b4a5d;
+}
+select:hover, input:hover { border-color: #52687e; }
+input[type="range"] { accent-color: var(--cyan); }
+button { transition: background-color .14s, border-color .14s, box-shadow .14s, transform .14s; }
+button:hover { border-color: #66d9cf; }
+button.primary, button.active {
+  color: #0c171d;
+  border-color: transparent;
+  background: linear-gradient(135deg, #57dfd0, #83b8ff);
+  box-shadow: 0 2px 9px rgba(72, 216, 201, .09);
+}
+button.primary:hover, button.active:hover { border-color: transparent; filter: brightness(1.035); }
+button.secondary { color: #dce5ef; border-color: #3b4b5d; background: #222d3a; }
+button.secondary:hover { background: #293648; border-color: #67cfc6; }
+button.danger { color: #ffc0c8; border-color: #874a56; background: #30232b; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+.brand-mark {
+  color: #0c171d;
+  background: linear-gradient(145deg, #58e0d1, #7cb6ff);
+  box-shadow: 0 5px 22px rgba(72, 216, 201, .12);
+}
+.brand-logo { filter: drop-shadow(0 4px 11px rgba(85, 112, 150, .20)); }
+.badge { color: #b9cad9; border-color: #3d5668; background: rgba(49, 74, 91, .22); }
+.stage-head, .legend { border-color: rgba(129, 151, 173, .19); }
+.canvas-wrap { background: #0b1118; }
+.canvas-tip {
+  color: #a8b7c9;
+  background: rgba(9, 15, 22, .91);
+  border: 1px solid rgba(92, 116, 140, .28);
+}
+.live-dot { background: #8798ad; box-shadow: 0 0 0 4px rgba(135, 152, 173, .12); }
+.live-dot.running {
+  background: var(--positive);
+  box-shadow: 0 0 0 4px rgba(88, 217, 176, .13), 0 0 12px rgba(88, 217, 176, .52);
+}
+.view-control, .metric-title, .group-title { color: var(--muted); }
+.metric+.metric { border-color: rgba(129, 151, 173, .17); }
+.metric-sub, .explain, .example-note { color: #899aaf; }
+.feedback { border-color: var(--line); background: rgba(20, 28, 38, .82); }
+.feedback p, .notice { color: #b2c0cf; }
+.feedback .result { color: var(--cyan); }
+.notice strong, .notice-icon { color: var(--gold); }
+
+/* Heatmap remains cool-to-warm for familiar utilization interpretation. */
+.gradient { background: linear-gradient(90deg, #4b9eff, #42d4c5, #b7e06d, #f2c978, #ff6b7f); }
+.performance-dialog {
+  color: var(--ink);
+  border-color: #40566b;
+  background: linear-gradient(155deg, #1a2532, #101720);
+}
+.performance-dialog::backdrop { background: rgba(5, 9, 14, .86); }
+.performance-dialog p { color: #bac6d4; }
+.performance-tips li { color: #d8e1eb; }
+.performance-tips li::before { color: var(--cyan); }
+.performance-kicker {
+  color: #f2cf82;
+  border-color: rgba(242, 201, 120, .30);
+  background: rgba(242, 201, 120, .10);
+}
+
+@media (prefers-reduced-motion: reduce) { button { transition: none; } }
