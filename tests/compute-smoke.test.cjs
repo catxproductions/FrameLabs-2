@@ -403,6 +403,45 @@ test('collapse dust and fire smoke particles animate in world space and respect 
   assert.ok(state.atmosphericParticles.length <= 120, 'expanded particles remain capped at five times the test quality budget');
 });
 
+test('maximum smoke density produces roughly five times the emissions of the previous maximum', () => {
+  const js = read('js/main.js');
+  const start = js.indexOf('function addAtmosphericParticle(');
+  const end = js.indexOf('function spawnMemberDebris(', start);
+  assert.ok(start >= 0 && end > start);
+  function smokeCountAtDensity(density) {
+    const state = {
+      atmosphericParticles: [],
+      memberLinks: [{ id: 'columns|0,0', nodeA: 'a', nodeB: 'b', e: { burning: true, failed: false, x: 0, smokeEmissionClock: 0 } }],
+      nodes: {
+        a: { position: { x: 0, y: 2 }, velocity: { x: 0, y: 0 } },
+        b: { position: { x: 1, y: 2 }, velocity: { x: 0, y: 0 } }
+      },
+      debris: [],
+      time: 0
+    };
+    const context = {
+      sim: state,
+      MAX_ATMOSPHERIC_PARTICLES: 3000,
+      QUALITY_PROFILE: { maxParticles: 3000 },
+      EFFECT_SETTINGS: { fireRealism: .8, fireDensity: 1, fireSize: 1, dustRealism: .72, dustDensity: 1, dustSize: 1, smokeRealism: .78, smokeDensity: density, smokeSize: 1 },
+      clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
+      windDirectionSign: () => 1,
+      windSpeedRatio: () => 0,
+      windGustFactor: () => 1,
+      Math,
+      Number,
+      globalThis: {}
+    };
+    vm.runInNewContext(`${js.slice(start, end)}\nglobalThis.smokeRateApi = { updateAtmosphericParticles };`, context, { filename: 'smoke-density-rate.test.js' });
+    for (let i = 0; i < 60; i++) context.globalThis.smokeRateApi.updateAtmosphericParticles(.05);
+    return state.atmosphericParticles.filter(p => p.kind === 'smoke').length;
+  }
+  const previousMaximum = smokeCountAtDensity(2);
+  const expandedMaximum = smokeCountAtDensity(10);
+  assert.ok(previousMaximum > 0);
+  assert.ok(expandedMaximum >= previousMaximum * 4.5, `expanded density should emit about 5x smoke (old=${previousMaximum}, new=${expandedMaximum})`);
+});
+
 test('fire, dust, and smoke expose live visual sliders with valid setting bindings', () => {
   const html = read('index.html');
   const js = read('js/main.js');
@@ -428,6 +467,7 @@ test('fire, dust, and smoke expose live visual sliders with valid setting bindin
     assert.match(html, new RegExp(`id="${id}" type="range" min="0" max="1250"`), `${id} reaches five times its old maximum`);
   }
   assert.match(js, /source\.e\.smokeEmissionClock=accumulated-available\*source\.interval/);
+  assert.ok(js.includes('const smokeDensity=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,10)'), 'smoke scheduler honors the extended density maximum');
   assert.match(js, /due\.length<240/, 'smoke emission budget is extended fivefold');
   assert.match(js, /sim\.smokeEmissionCursor=\(sourceStart\+Math\.max\(1,emitCount\)\)%sources\.length/, 'high-density smoke emissions rotate across sources');
   assert.match(js, /const realism=clamp\(Number\(EFFECT_SETTINGS\[p\.kind==='smoke'\?'smokeRealism':'dustRealism'\]\)/);
