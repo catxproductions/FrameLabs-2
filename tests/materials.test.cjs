@@ -357,7 +357,7 @@ test('material import never overrides built-ins and does not partially register 
     }
   };
 
-  assert.deepEqual(library.importMaterialLibrary(forgedBuiltIn), []);
+  assert.equal(library.importMaterialLibrary(forgedBuiltIn).length, 0);
   assert.equal(library.materials.steel.label, 'Steel');
   assert.equal(library.materials.steel.density, 7.8);
 });
