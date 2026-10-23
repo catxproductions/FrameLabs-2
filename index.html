@@ -167,6 +167,27 @@
           <select id="windDirection"><option value="-1">Blowing left ←</option><option value="1" selected>Blowing right →</option></select>
         </div>
       </div>
+      <div class="effect-settings" aria-label="Fire, dust, and smoke visual settings">
+        <section class="effect-subgroup" aria-labelledby="fireControlsTitle">
+          <h3 class="effect-subgroup-title" id="fireControlsTitle">🔥 Fire</h3>
+          <div class="field"><label for="fireRealism">Flame realism <output id="fireRealismOut">80%</output></label><input id="fireRealism" type="range" min="0" max="100" step="1" value="80"></div>
+          <div class="field"><label for="fireDensity">Flame density <output id="fireDensityOut">100%</output></label><input id="fireDensity" type="range" min="0" max="200" step="10" value="100"></div>
+          <div class="field"><label for="fireSize">Flame size <output id="fireSizeOut">100%</output></label><input id="fireSize" type="range" min="50" max="200" step="10" value="100"></div>
+        </section>
+        <section class="effect-subgroup" aria-labelledby="dustControlsTitle">
+          <h3 class="effect-subgroup-title" id="dustControlsTitle">🌫 Dust</h3>
+          <div class="field"><label for="dustRealism">Dust realism <output id="dustRealismOut">72%</output></label><input id="dustRealism" type="range" min="0" max="100" step="1" value="72"></div>
+          <div class="field"><label for="dustDensity">Dust density <output id="dustDensityOut">100%</output></label><input id="dustDensity" type="range" min="0" max="200" step="10" value="100"></div>
+          <div class="field"><label for="dustSize">Dust plume size <output id="dustSizeOut">100%</output></label><input id="dustSize" type="range" min="50" max="250" step="10" value="100"></div>
+        </section>
+        <section class="effect-subgroup" aria-labelledby="smokeControlsTitle">
+          <h3 class="effect-subgroup-title" id="smokeControlsTitle">☁ Smoke</h3>
+          <div class="field"><label for="smokeRealism">Smoke realism <output id="smokeRealismOut">78%</output></label><input id="smokeRealism" type="range" min="0" max="100" step="1" value="78"></div>
+          <div class="field"><label for="smokeDensity">Smoke density <output id="smokeDensityOut">100%</output></label><input id="smokeDensity" type="range" min="0" max="200" step="10" value="100"></div>
+          <div class="field"><label for="smokeSize">Smoke plume size <output id="smokeSizeOut">100%</output></label><input id="smokeSize" type="range" min="50" max="250" step="10" value="100"></div>
+        </section>
+      </div>
+      <p class="environment-note effect-settings-note">Visual tuning only: fire heat, fuel use, ignition, and spread still follow the physics model. Particle counts continue to respect the selected quality preset.</p>
     </div>
 
     <div class="group group-display">
