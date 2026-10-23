@@ -470,11 +470,12 @@ function addAtmosphericParticle(particle){
 }
 function spawnDustPlume(x,y,intensity=1,sourceVx=0,sourceVy=0){
  if(!Number.isFinite(x+y))return;
- const density=clamp(Number(EFFECT_SETTINGS.dustDensity)||0,0,2);
- if(density<=0)return;
+ const density=clamp(Number(EFFECT_SETTINGS.dustDensity)||0,0,10);
+ const rawPlumeSize=Number(EFFECT_SETTINGS.dustSize);
+ const plumeSize=clamp(Number.isFinite(rawPlumeSize)?rawPlumeSize:1,0,12.5);
+ if(density<=0||plumeSize<=0)return;
  intensity=clamp(Number(intensity)||1,.2,3.4);
  const realism=clamp(Number(EFFECT_SETTINGS.dustRealism)||0,0,1);
- const plumeSize=clamp(Number(EFFECT_SETTINGS.dustSize)||1,.5,2.5);
  const count=Math.max(1,Math.round((9+intensity*9)*density));
  const horizontalDrift=clamp(Number(sourceVx)||0,-3.5,3.5)*.12;
  for(let i=0;i<count;i++){
@@ -484,7 +485,7 @@ function spawnDustPlume(x,y,intensity=1,sourceVx=0,sourceVy=0){
    kind:'dust',x:x+spread*.055*intensity*plumeSize,
    y:y+(Math.random()-.5)*.08*intensity*plumeSize,
    vx:horizontalDrift+spread*(.16+Math.random()*.46)*intensity*(.75+plumeSize*.25),
-   vy:.12+upward*(.22+.22*intensity)+Math.max(0,Number(sourceVy)||0)*.035,
+   vy:.48+upward*(.38+.38*intensity)+Math.max(0,Number(sourceVy)||0)*.05,
    age:0,life,size:(.035+Math.random()*(.055+.025*intensity))*plumeSize,
    growth:(.018+Math.random()*.045)*(.65+plumeSize*.35),
    opacity:clamp((.19+Math.random()*.2)*(.9+realism*.18),.05,.58),
@@ -496,18 +497,19 @@ function spawnDustPlume(x,y,intensity=1,sourceVx=0,sourceVy=0){
 }
 function spawnSmokePuff(x,y,sourceVx=0,sourceVy=0,scale=1){
  if(!Number.isFinite(x+y))return;
- const density=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,2);
- if(density<=0)return;
+ const density=clamp(Number(EFFECT_SETTINGS.smokeDensity)||0,0,10);
+ const rawPlumeSize=Number(EFFECT_SETTINGS.smokeSize);
+ const plumeSize=clamp(Number.isFinite(rawPlumeSize)?rawPlumeSize:1,0,12.5);
+ if(density<=0||plumeSize<=0)return;
  const realism=clamp(Number(EFFECT_SETTINGS.smokeRealism)||0,0,1);
- const plumeSize=clamp(Number(EFFECT_SETTINGS.smokeSize)||1,.5,2.5);
  const fireScale=clamp(Number(sim.fireSmokeScale)||1,1,2.8);
  const lifeMultiplier=clamp(1+(fireScale-1)*.5,1,1.9);
  const opacityMultiplier=clamp(1+(fireScale-1)*.14,1,1.25);
- scale=clamp((Number(scale)||1)*fireScale*1.12*plumeSize,.35,6.8);
+ scale=clamp((Number(scale)||1)*fireScale*1.12*plumeSize,.01,34);
  addAtmosphericParticle({
   kind:'smoke',x:x+(Math.random()-.5)*.035*plumeSize,y,
   vx:clamp((Number(sourceVx)||0)*.10+(Math.random()-.5)*(.22+realism*.10),-1.1,1.1),
-  vy:.28+Math.random()*(.24+realism*.12)+Math.max(0,Number(sourceVy)||0)*.04,
+  vy:.68+Math.random()*(.42+realism*.18)+Math.max(0,Number(sourceVy)||0)*.06,
   age:0,life:(4.2+Math.random()*2.2)*lifeMultiplier*(.92+realism*.14),
   size:(.07+Math.random()*.055)*(.9+realism*.22),
   growth:(.11+Math.random()*.095)*(.85+plumeSize*.15),
@@ -538,13 +540,21 @@ function emitFireSmoke(dt){
  if(!fireCount||smokeDensity<=0){for(const source of sources)source.e.smokeEmissionClock=0;sim.smokeEmissionCursor=0;return}
  const intervalBoost=clamp(1+(sim.fireSmokeScale-1)*.35,1,1.65);
  const due=[];
- for(const source of sources){source.interval=source.baseInterval/(intervalBoost*Math.max(.08,smokeDensity));if(source.e.smokeEmissionClock>=source.interval)due.push(source)}
+ for(const source of sources){
+  source.interval=source.baseInterval/(intervalBoost*Math.max(.08,smokeDensity));
+  const accumulated=Math.max(0,Number(source.e.smokeEmissionClock)||0);
+  const available=Math.floor(accumulated/source.interval);
+  const eventCount=Math.min(12,available);
+  // Drop excessive backlog instead of catching up after a paused or slow frame.
+  source.e.smokeEmissionClock=accumulated-available*source.interval;
+  for(let event=0;event<eventCount&&due.length<240;event++)due.push(source);
+ }
  if(!due.length)return;
  // Emission capacity increases with active fires, and a rotating cursor prevents early members from starving later ones.
- const emitBudget=clamp(Math.ceil((10+Math.ceil(Math.sqrt(fireCount)*7))*smokeDensity),0,48),start=Math.floor(Number(sim.smokeEmissionCursor)||0)%due.length,emitCount=Math.min(emitBudget,due.length);
+ const emitBudget=clamp(Math.ceil((10+Math.ceil(Math.sqrt(fireCount)*7))*smokeDensity),0,240),start=Math.floor(Number(sim.smokeEmissionCursor)||0)%due.length,emitCount=Math.min(emitBudget,due.length);
  const puffsPerSource=sim.fireSmokeScale>=2.35?2:1;
  for(let i=0;i<emitCount;i++){
-  const source=due[(start+i)%due.length];source.e.smokeEmissionClock%=source.interval;
+  const source=due[(start+i)%due.length];
   for(let puff=0;puff<puffsPerSource;puff++){
    if(source.kind==='member'){
     const t=clamp(.18+Math.random()*.64+(puff?((Math.random()-.5)*.2):0),.06,.94),x=source.a.position.x+(source.b.position.x-source.a.position.x)*t,y=source.a.position.y+(source.b.position.y-source.a.position.y)*t;
@@ -564,7 +574,7 @@ function updateAtmosphericParticles(dt){
  for(let i=particles.length-1;i>=0;i--){
   const p=particles[i];p.age+=step;
   if(p.age>=p.life){particles.splice(i,1);continue}
-  const phase=p.seed+p.age*(p.kind==='smoke'?1.25:2.6),rise=p.kind==='smoke'?.19:.035;
+  const phase=p.seed+p.age*(p.kind==='smoke'?1.25:2.6),rise=p.kind==='smoke'?.75:.32;
   const windTarget=windDirectionSign()*windSpeedRatio()*windGustFactor()*(p.kind==='smoke'?1.15:.88);p.vx+=(Math.sin(phase)*p.drift+windTarget-(p.vx||0)*(p.kind==='smoke'?.55:.70))*step;
   p.vy+=rise*step;p.x+=p.vx*step;p.y+=p.vy*step;p.size+=p.growth*step;p.rotation+=(p.spin||0)*step;
  }
@@ -1129,9 +1139,9 @@ function drawMaterialEffects(){
  for(const link of sim.memberLinks){const e=link.e;if(!e||e.failed||e.burning||(e.thermalDamage||0)<.035)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const x1=GRID_LEFT+a.position.x/STORY_HEIGHT*DX,y1=GROUND_Y-a.position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+b.position.x/STORY_HEIGHT*DX,y2=GROUND_Y-b.position.y/STORY_HEIGHT*STORY_PX;ctx.save();ctx.globalAlpha=clamp(e.thermalDamage*.82,.06,.55);ctx.strokeStyle='#ff9857';ctx.lineWidth=1.8+e.thermalDamage*3.2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore()}
  // Flames are visual-only: fuel consumption and fire spread stay in the physics model.
  const fireRealism=clamp(Number(EFFECT_SETTINGS.fireRealism)||0,0,1);
- const fireDensity=clamp(Number(EFFECT_SETTINGS.fireDensity)||0,0,2);
- const fireSize=clamp(Number(EFFECT_SETTINGS.fireSize)||1,.5,2);
- if(fireDensity>0){
+ const fireDensity=clamp(Number(EFFECT_SETTINGS.fireDensity)||0,0,10);
+ const rawFireSize=Number(EFFECT_SETTINGS.fireSize),fireSize=clamp(Number.isFinite(rawFireSize)?rawFireSize:1,0,10);
+ if(fireDensity>0&&fireSize>0){
   for(const link of sim.memberLinks){
    const e=link.e;if(!e.burning||e.failed)continue;
    const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
@@ -1141,7 +1151,7 @@ function drawMaterialEffects(){
    ctx.strokeStyle='rgba(255,92,35,.28)';ctx.lineWidth=(5+fireRealism*5)*fireSize;
    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.shadowBlur=0;
    ctx.strokeStyle='rgba(255,128,48,.42)';ctx.lineWidth=Math.max(2,2.4*fireSize);ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-   const baseCount=clamp(Math.floor(length/25),1,8),count=Math.max(1,Math.min(20,Math.round(baseCount*fireDensity)));
+   const baseCount=clamp(Math.floor(length/25),1,8),count=Math.max(1,Math.min(80,Math.round(baseCount*fireDensity)));
    for(let i=0;i<count;i++){
     const t=(i+.5)/count,x=x1+(x2-x1)*t,y=y1+(y2-y1)*t;
     const phase=ENVIRONMENT.windTime*(8+fireRealism*5)+i*2.1+e.x*.7;
@@ -2068,7 +2078,7 @@ function applyPhysicsComputeMode(){const mode=$('computeMode')?.value||'auto';wi
 $('computeMode')?.addEventListener('change',applyPhysicsComputeMode);
 function bindEffectSlider(id,key,outId,minFactor,maxFactor){
  const input=$(id),out=$(outId);if(!input)return;
- const apply=()=>{const percent=Number(input.value);EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);if(out)out.textContent=`${Math.round(percent)}%`;draw()};
+ const apply=()=>{const percent=Number(input.value),isZero=percent<=0;EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);input.classList.toggle('is-zero-disabled',isZero);input.setAttribute('aria-valuetext',isZero?'Disabled':String(Math.round(percent))+'%');const field=input.closest('.field');field?.classList.toggle('effect-control-disabled',isZero);if(out){out.textContent=isZero?'Disabled':String(Math.round(percent))+'%';out.setAttribute('aria-live','polite')}draw()};
  input.addEventListener('input',apply);apply();
 }
 [
