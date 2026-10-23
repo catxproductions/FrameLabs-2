@@ -826,4 +826,20 @@ body.simulation-only .view-mode-toggle { top: 10px; right: 10px; }
 @media (prefers-reduced-motion: reduce) {
   .left-insights *, .panel * { scroll-behavior: auto; }
 }
+/* Final compactness tweaks for narrower desktop windows. */
+@media (min-width: 901px) and (max-width: 1150px) {
+  .topline .badge,
+  .topline h1 span { display: none; }
+  .brand-logo, .brand-mark { width: 40px; height: 40px; }
+  .left-insights .metric-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .left-insights .metric-value {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
 
