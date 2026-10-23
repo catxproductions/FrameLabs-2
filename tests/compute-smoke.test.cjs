@@ -415,6 +415,9 @@ test('maximum wind applies a direction-aware force to both supported and free st
   assert.match(js, /-1\.15\*node\.velocity\.x\+windAx/);
   assert.match(js, /node\.acceleration\.x=-\.22\*node\.velocity\.x\+windAx/);
   assert.match(js, /speed\*speed\*\(\.18\+1\.05\*level\/Math\.max\(1,NY\)\)\*gust/);
+  assert.match(js, /source\.baseInterval\/\(intervalBoost\*Math\.max\(\.08,smokeDensity\)\)/, 'smoke density adjusts emission frequency');
+  assert.match(js, /node\.windPreviewSway=sim\.lateralDisp\[node\.referenceLevel\]\|\|0/);
+  assert.match(js, /node\.position\.x\+sway-previousSway/);
 });
 
 test('collapse and impact events emit dust, burning sources emit smoke, and canvas renders atmospheric particles', () => {
