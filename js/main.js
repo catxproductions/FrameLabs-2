@@ -1848,7 +1848,13 @@ function registerImportedMaterials(payload) {
   }
 
   for (const property of numberProperties) {
-   if (Number(current[property]) !== Number(saved[property])) return false;
+   // Older exports may omit newer fields; those settings should use the new defaults.
+   if (
+    Object.prototype.hasOwnProperty.call(saved, property) &&
+    Number(current[property]) !== Number(saved[property])
+   ) {
+    return false;
+   }
   }
 
   const savedFlammable = typeof saved.isFlamable === 'boolean'
