@@ -535,7 +535,7 @@ function emitFireSmoke(dt){
  if(!fireCount||smokeDensity<=0){sim.smokeEmissionCursor=0;return}
  const intervalBoost=clamp(1+(sim.fireSmokeScale-1)*.35,1,1.65);
  const due=[];
- for(const source of sources){source.interval=source.baseInterval/intervalBoost;if(source.e.smokeEmissionClock>=source.interval)due.push(source)}
+ for(const source of sources){source.interval=source.baseInterval/(intervalBoost*Math.max(.08,smokeDensity));if(source.e.smokeEmissionClock>=source.interval)due.push(source)}
  if(!due.length)return;
  // Emission capacity increases with active fires, and a rotating cursor prevents early members from starving later ones.
  const emitBudget=clamp(Math.ceil((10+Math.ceil(Math.sqrt(fireCount)*7))*smokeDensity),0,48),start=Math.floor(Number(sim.smokeEmissionCursor)||0)%due.length,emitCount=Math.min(emitBudget,due.length);
