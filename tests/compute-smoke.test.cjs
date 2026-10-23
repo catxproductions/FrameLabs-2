@@ -359,6 +359,7 @@ test('collapse dust and fire smoke particles animate in world space and respect 
     clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
     windDirectionSign: () => 1,
     windSpeedRatio: () => 0,
+    windGustFactor: () => 1,
     Math,
     Number,
     globalThis: {}
