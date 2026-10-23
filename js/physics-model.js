@@ -7,7 +7,14 @@
     concrete:  Object.freeze({ density: 2.35, staticFriction: .88, dynamicFriction: .64, restitution: .08, wetSensitivity: .28, elasticity: .25 }),
     wood:      Object.freeze({ density: .68, staticFriction: .76, dynamicFriction: .49, restitution: .12, wetSensitivity: .62, elasticity: .58 }),
     flammable:Object.freeze({ density: .86, staticFriction: .63, dynamicFriction: .41, restitution: .10, wetSensitivity: .48, elasticity: .44 }),
-    explosive: Object.freeze({ density: 1.12, staticFriction: .57, dynamicFriction: .37, restitution: .12, wetSensitivity: .42, elasticity: .38 })
+    explosive: Object.freeze({ density: 1.12, staticFriction: .57, dynamicFriction: .37, restitution: .12, wetSensitivity: .42, elasticity: .38 }),
+    frostedGlass: Object.freeze({ density: 2.42, staticFriction: .42, dynamicFriction: .29, restitution: .06, wetSensitivity: .30, elasticity: .16 }),
+    tintedGlass: Object.freeze({ density: 2.46, staticFriction: .45, dynamicFriction: .31, restitution: .07, wetSensitivity: .32, elasticity: .18 }),
+    refractiveGlass: Object.freeze({ density: 2.58, staticFriction: .40, dynamicFriction: .27, restitution: .09, wetSensitivity: .30, elasticity: .22 }),
+    weatheredBrick: Object.freeze({ density: 2.05, staticFriction: .86, dynamicFriction: .64, restitution: .06, wetSensitivity: .24, elasticity: .18 }),
+    treatedWood: Object.freeze({ density: .74, staticFriction: .78, dynamicFriction: .52, restitution: .13, wetSensitivity: .45, elasticity: .54 }),
+    brushedAluminum: Object.freeze({ density: 2.70, staticFriction: .46, dynamicFriction: .29, restitution: .17, wetSensitivity: .68, elasticity: .70 }),
+    stainlessSteel: Object.freeze({ density: 7.90, staticFriction: .50, dynamicFriction: .30, restitution: .15, wetSensitivity: .75, elasticity: .76 })
   });
   const GROUND = MATERIALS.concrete;
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
