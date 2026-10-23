@@ -306,3 +306,79 @@ test('material import accepts older exports that omit optional newer properties'
 
   assert.equal(current.importMaterialLibrary(oldPayload).length, 0);
 });
+
+test('material import never overrides built-ins and does not partially register invalid payloads', () => {
+  const library = loadLibraries().materials;
+
+  const invalidPayload = {
+    materialLibrary: {
+      'valid-first': {
+        label: 'Valid first',
+        color: '#abcdef',
+        isExplosive: false,
+        isFlamable: false,
+        density: 1.5,
+        staticFriction: 0.6,
+        dynamicFriction: 0.3,
+        restitution: 0.1,
+        wetSensitivity: 0.4,
+        elasticity: 0.3,
+        heatWeakening: 0.004,
+        heatSensitivity: 1,
+        column: { mass: 0.2, capacity: 8 },
+        beam: { mass: 0.2, capacity: 8 },
+        slab: { mass: 0.2, capacity: 8 },
+        brace: { mass: 0.2, capacity: 8 }
+      },
+      'Invalid ID!': {
+        label: 'Invalid id',
+        column: { mass: 0.2, capacity: 8 }
+      }
+    }
+  };
+
+  assert.throws(
+    () => library.importMaterialLibrary(invalidPayload),
+    /invalid custom material id/
+  );
+  assert.equal(
+    library.getMaterialIds().includes('valid-first'),
+    false,
+    'definitions are added only after the full import list has passed validation'
+  );
+
+  const forgedBuiltIn = {
+    materialLibrary: {
+      steel: {
+        ...JSON.parse(JSON.stringify(library.materials.steel)),
+        label: 'Overwritten steel',
+        density: 999
+      }
+    }
+  };
+
+  assert.deepEqual(library.importMaterialLibrary(forgedBuiltIn), []);
+  assert.equal(library.materials.steel.label, 'Steel');
+  assert.equal(library.materials.steel.density, 7.8);
+});
+
+test('matching custom IDs also compare saved impact resistance', () => {
+  const library = loadLibraries().materials;
+  library.addMaterial({
+    id: 'impact-glass',
+    label: 'Impact glass',
+    basedOn: 'concrete',
+    impactResistance: { column: 0.4, beam: 0.3, slab: 0.2, brace: 0.25 }
+  });
+
+  const payload = JSON.parse(JSON.stringify({
+    materialLibrary: library.materials,
+    materialImpactResistance: library.impactResistance
+  }));
+  payload.materialImpactResistance['impact-glass'].beam = 0.99;
+
+  assert.throws(
+    () => library.importMaterialLibrary(payload),
+    /already exists with different settings/
+  );
+});
