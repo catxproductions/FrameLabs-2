@@ -2,14 +2,15 @@
    These parameters are illustrative game units, not calibrated engineering data. */
 (() => {
   'use strict';
-  const MATERIALS = Object.freeze({
-    steel:     Object.freeze({ density: 7.8, staticFriction: .50, dynamicFriction: .30, restitution: .16, wetSensitivity: .78, elasticity: .78 }),
-    concrete:  Object.freeze({ density: 2.35, staticFriction: .88, dynamicFriction: .64, restitution: .08, wetSensitivity: .28, elasticity: .25 }),
-    wood:      Object.freeze({ density: .68, staticFriction: .76, dynamicFriction: .49, restitution: .12, wetSensitivity: .62, elasticity: .58 }),
-    flammable:Object.freeze({ density: .86, staticFriction: .63, dynamicFriction: .41, restitution: .10, wetSensitivity: .48, elasticity: .44 }),
-    explosive: Object.freeze({ density: 1.12, staticFriction: .57, dynamicFriction: .37, restitution: .12, wetSensitivity: .42, elasticity: .38 })
-  });
-  const GROUND = MATERIALS.concrete;
+  // Structural stats and contact-physics properties share one source of truth.
+  // Load materials.js before this file (as index.html does).
+  const MATERIAL_LIBRARY = window.FrameLabMaterials;
+  if (!MATERIAL_LIBRARY) {
+    console.error('FrameLabs 2: materials.js must load before physics-model.js.');
+    return;
+  }
+  const MATERIALS = MATERIAL_LIBRARY.materials;
+  const GROUND = MATERIALS.concrete || Object.values(MATERIALS)[0];
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   function material(name) { return MATERIALS[name] || GROUND; }
