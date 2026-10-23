@@ -397,6 +397,10 @@ test('collapse dust and fire smoke particles animate in world space and respect 
   const beforeSmokeOff = state.atmosphericParticles.length;
   api.spawnSmokePuff(1, 2, 0, 0, 1);
   assert.equal(state.atmosphericParticles.length, beforeSmokeOff, 'zero smoke density stops new smoke emissions');
+  context.EFFECT_SETTINGS.dustDensity = 10;
+  for (let i = 0; i < 10; i++) api.spawnDustPlume(1, 1, 2);
+  assert.ok(state.atmosphericParticles.length > 24, 'maximum dust density can use the expanded atmospheric particle budget');
+  assert.ok(state.atmosphericParticles.length <= 120, 'expanded particles remain capped at five times the test quality budget');
 });
 
 test('fire, dust, and smoke expose live visual sliders with valid setting bindings', () => {
@@ -410,6 +414,11 @@ test('fire, dust, and smoke expose live visual sliders with valid setting bindin
   assert.ok(js.includes("input.classList.toggle('is-zero-disabled',isZero)"), 'zero values gray out their slider');
   assert.ok(js.includes("out.textContent=isZero?'Disabled':String(Math.round(percent))+'%'"), 'zero values show Disabled in the readout');
   assert.ok(js.includes("const rawFireSize=Number(EFFECT_SETTINGS.fireSize),fireSize=clamp(Number.isFinite(rawFireSize)?rawFireSize:1,0,10)"), 'zero flame size turns flame drawing off');
+  assert.ok(js.includes("if(isZero&&(key==='dustDensity'||key==='dustSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='dust')"), 'zero dust settings clear existing dust immediately');
+  assert.ok(js.includes("if(isZero&&(key==='smokeDensity'||key==='smokeSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='smoke')"), 'zero smoke settings clear existing smoke immediately');
+  assert.match(js, /const densityExpansion=clamp\(visualDensity\/2,1,5\)/);
+  assert.match(js, /const limit=Math\.min\(3000,Math\.floor\(qualityBudget\*densityExpansion\)\)/);
+  assert.match(js, /rise=p\.kind==='smoke'\?\.75:\.32/);
   const css = read('css/styles.css');
   assert.ok(css.includes('.effect-control-disabled input[type="range"]'), 'zeroed sliders use disabled styling but remain interactive');
   for (const id of ['fireDensity','fireSize','dustDensity','smokeDensity']) {
@@ -420,6 +429,7 @@ test('fire, dust, and smoke expose live visual sliders with valid setting bindin
   }
   assert.match(js, /source\.e\.smokeEmissionClock=accumulated-available\*source\.interval/);
   assert.match(js, /due\.length<240/, 'smoke emission budget is extended fivefold');
+  assert.match(js, /sim\.smokeEmissionCursor=\(sourceStart\+Math\.max\(1,emitCount\)\)%sources\.length/, 'high-density smoke emissions rotate across sources');
   assert.match(js, /const realism=clamp\(Number\(EFFECT_SETTINGS\[p\.kind==='smoke'\?'smokeRealism':'dustRealism'\]\)/);
 });
 
