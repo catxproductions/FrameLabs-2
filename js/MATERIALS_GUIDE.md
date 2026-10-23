@@ -68,6 +68,17 @@ automatically. You do not need to edit `main.js` to register its basic propertie
 These properties can be edited independently, so creating a new material does not require
 copying or changing the fire and explosion functions in `main.js`.
 
+## Save and share custom materials
+
+The game's **Save JSON** action stores custom material settings and impact resistance with
+the building design. When you import that JSON into FrameLabs 2, missing custom material
+definitions are registered automatically, and their labels appear in the Material dropdown.
+
+The game never lets an imported file overwrite the current built-in definitions. If a custom
+material already exists under the same ID but has different settings, the import is stopped
+with a message rather than silently using mismatched physics. Use a unique ID or make the
+definition in `materials.js` match the design you are importing.
+
 ## Notes
 
 - Keep each `id` unique. Saved designs identify materials by this id, so do not rename
