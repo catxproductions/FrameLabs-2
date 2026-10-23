@@ -38,6 +38,9 @@ function updateLateralSway(dt){
   sim.floors[level].position.x=sim.lateralDisp[level];sim.floors[level].velocity.x=sim.lateralVel[level];sim.floors[level].acceleration.x=ax;
  }
  sim.lateralDisp[0]=0;sim.lateralVel[0]=0;
+ // Track the active simulation's sway baseline so pausing at full wind does not
+ // apply the accumulated preview displacement a second time to already-moving joints.
+ if(sim.running)for(const node of Object.values(sim.nodes)){if(node.referenceLevel>0&&node.isGroundConnected)node.windPreviewSway=sim.lateralDisp[node.referenceLevel]||0;}
 }
 // Material stats and collision resistance live in materials.js, so a new material
 // can be added once and then used by both the construction tools and physics model.
