@@ -156,7 +156,9 @@ test('simulation uses fixed 120 Hz physics substeps and exposes immersive fullsc
   assert.match(js, /setSimulationOverlays\(!showSimulationOverlays\)/);
   assert.match(js, /environmentAcceleration/);
   assert.match(js, /stepPhysics\(DT\)/);
-  assert.match(js, /setSimulationOnly\(!document\.body\.classList\.contains\('simulation-only'\)\)/);
+  assert.match(js, /function enterImmersiveFullscreen\(\)/);
+  assert.match(js, /function exitImmersiveFullscreen\(\)/);
+  assert.match(js, /document\.addEventListener\('fullscreenchange'/);
   assert.match(css, /body\.simulation-only \.panel/);
   assert.match(css, /body\.simulation-only canvas\{width:100%;height:100%;aspect-ratio:auto/);
 });
