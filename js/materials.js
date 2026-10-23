@@ -209,7 +209,8 @@
   });
 
   /*
-   * BEGINNER EXAMPLE — copy this call and edit it to make another material.
+   * BEGINNER EXAMPLE — copy this call, remove the leading comment markers, and edit it.
+   * Keep it with the built-in addMaterial calls above the window.FrameLabMaterials export.
    *
    * addMaterial({
    *   id: 'glass',
