@@ -75,7 +75,8 @@ test('quality selection and moisture shading return bounded, deterministic resul
 
 
 test('structural wind demand is speed-squared, gust-aware, and exposure/height dependent', () => {
-  const { model, materials } = loadLibraries();
+  const { model, materials: library } = loadLibraries();
+  const materials = library.materials;
   const demand = (speedKph, height, exposure = 1.35, kind = 'column', gustFactor = 1) =>
     model.windMemberDemand({ speedKph, height, exposure, kind, gustFactor });
   assert.equal(demand(0, 1), 0, 'calm conditions add no wind demand');
