@@ -304,7 +304,7 @@
         entries: [
           { binding: 0, resource: { buffer: input, size: inputBytes } },
           { binding: 1, resource: { buffer: output, size: outputSize } },
-          { binding: 2, resource: { buffer: uniform, size: 4 } }
+          { binding: 2, resource: { buffer: uniform } }
         ]
       });
       const encoder = device.createCommandEncoder();
@@ -380,7 +380,7 @@
         layout: pipeline.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: state, size: bytes } },
-          { binding: 1, resource: { buffer: uniform, size: 16 } }
+          { binding: 1, resource: { buffer: uniform } }
         ]
       });
       const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
@@ -592,9 +592,10 @@
     for (let i = 0; i < packed.length; i++) if (!Number.isFinite(packed[i])) packed[i] = 0;
     const transferOwnership = options && options.transferOwnership === true;
     const count = packed.length / BODY_STRIDE;
-    const useGPU = physicsMode === 'gpu' ||
+    const gpuBatchFits = packed.byteLength <= gpuBodyLimitBytes;
+    const useGPU = gpuBatchFits && (physicsMode === 'gpu' ||
       (physicsMode === 'auto' && autoPreferGPU && count >= autoGPUThreshold &&
-       packed.byteLength <= gpuBodyLimitBytes && navigator.gpu && gpuState !== 'unavailable');
+       navigator.gpu && gpuState !== 'unavailable'));
     if (useGPU && navigator.gpu && gpuState !== 'unavailable') {
       try {
         const result = await integrateGPU(packed, dt);
