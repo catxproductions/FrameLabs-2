@@ -459,29 +459,65 @@
     return nodes;
   }
 
-  function projectConstraintsWorker(nodes, edges, iterations) {
-    if (!worker) return Promise.resolve({ data: projectConstraintsCPU(nodes, edges, iterations), backend: 'Main-thread CPU fallback' });
+  function projectConstraintsWorker(nodes, edges, iterations, transferOwnership = false) {
+    if (!worker) return Promise.resolve({
+      data: projectConstraintsCPU(nodes, edges, iterations), edges, backend: 'Main-thread CPU fallback'
+    });
     const id = ++sequence;
+    const canTransfer = transferOwnership && nodes.byteOffset === 0 && edges.byteOffset === 0;
+    const nodePayload = canTransfer ? nodes : new Float64Array(nodes);
+    const edgePayload = canTransfer ? edges : new Float64Array(edges);
+    const nodeLength = nodePayload.length, edgeLength = edgePayload.length;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve: (message) => {
-        if (!message || !(message.data instanceof ArrayBuffer)) { reject(new Error('CPU worker returned an invalid constraint result')); return; }
-        const result = new Float64Array(message.data, 0,
-          Number.isInteger(message.length) ? message.length : message.data.byteLength / Float64Array.BYTES_PER_ELEMENT);
+        if (!message || !(message.data instanceof ArrayBuffer)) {
+          reject(new Error('CPU worker returned an invalid constraint result')); return;
+        }
+        const returnedNodeLength = Number.isInteger(message.nodeLength)
+          ? message.nodeLength : message.data.byteLength / Float64Array.BYTES_PER_ELEMENT;
+        if (returnedNodeLength !== nodeLength || returnedNodeLength * Float64Array.BYTES_PER_ELEMENT > message.data.byteLength) {
+          reject(new Error('CPU worker returned an invalid active constraint-node length')); return;
+        }
+        let returnedEdges = null;
+        if (message.edges instanceof ArrayBuffer) {
+          const returnedEdgeLength = Number.isInteger(message.edgeLength)
+            ? message.edgeLength : message.edges.byteLength / Float64Array.BYTES_PER_ELEMENT;
+          if (returnedEdgeLength !== edgeLength || returnedEdgeLength * Float64Array.BYTES_PER_ELEMENT > message.edges.byteLength) {
+            reject(new Error('CPU worker returned an invalid active constraint-edge length')); return;
+          }
+          returnedEdges = new Float64Array(message.edges, 0, returnedEdgeLength);
+        }
+        if (canTransfer && !returnedEdges) {
+          reject(new Error('CPU worker did not return the transferred constraint-edge buffer')); return;
+        }
         computeStats.workerConstraintCalls++;
         if (String(message.backend || '').includes('C++ WebAssembly')) computeStats.wasmConstraintCalls++;
-        resolve({ data: result, backend: message.backend || 'CPU worker constraints' });
+        if (message.data instanceof ArrayBuffer) computeStats.transferredBytes += message.data.byteLength;
+        if (message.edges instanceof ArrayBuffer) computeStats.transferredBytes += message.edges.byteLength;
+        resolve({
+          data: new Float64Array(message.data, 0, returnedNodeLength),
+          edges: returnedEdges,
+          backend: message.backend || 'CPU worker constraints'
+        });
       }, reject });
       try {
-        const nodeCopy = new Float64Array(nodes), edgeCopy = new Float64Array(edges);
-        computeStats.transferredBytes += nodeCopy.byteLength + edgeCopy.byteLength;
+        computeStats.transferredBytes += nodePayload.byteLength + edgePayload.byteLength;
         worker.postMessage({
-          id, type: 'projectConstraints', nodes: nodeCopy.buffer, edges: edgeCopy.buffer,
-          nodeLength: nodeCopy.length, edgeLength: edgeCopy.length, iterations
-        }, [nodeCopy.buffer, edgeCopy.buffer]);
+          id, type: 'projectConstraints', nodes: nodePayload.buffer, edges: edgePayload.buffer,
+          nodeLength, edgeLength, iterations
+        }, [nodePayload.buffer, edgePayload.buffer]);
       } catch (error) { pending.delete(id); reject(error); }
     }).catch((error) => {
       if (worker) disableWorker(error);
-      return { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), backend: 'Main-thread CPU fallback' };
+      if (canTransfer) {
+        // Input views are detached; let the caller repack from authoritative node objects.
+        return { data: null, edges: null, backend: 'Main-thread CPU fallback', retryRequired: true };
+      }
+      return {
+        data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations),
+        edges: new Float64Array(edges),
+        backend: 'Main-thread CPU fallback'
+      };
     });
   }
 
@@ -540,16 +576,17 @@
     });
   }
 
-  async function projectConstraints(nodes, edges, iterations) {
+  async function projectConstraints(nodes, edges, iterations, options = {}) {
     if (!(nodes instanceof Float64Array) || nodes.length % 5 !== 0 || !(edges instanceof Float64Array) || edges.length % 4 !== 0) {
       throw new TypeError('Constraint projection requires Float64 node state (5 values per node) and edge state (4 values per link).');
     }
     for (let i = 0; i < nodes.length; i++) if (!Number.isFinite(nodes[i])) nodes[i] = 0;
     for (let i = 0; i < edges.length; i++) if (!Number.isFinite(edges[i])) edges[i] = 0;
+    const transferOwnership = options && options.transferOwnership === true;
     const hadWebGPU = physicsBackend.includes('WebGPU');
     const workerResult = physicsMode === 'main'
-      ? { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), backend: 'Main-thread CPU' }
-      : await projectConstraintsWorker(nodes, edges, iterations);
+      ? { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), edges, backend: 'Main-thread CPU' }
+      : await projectConstraintsWorker(nodes, edges, iterations, transferOwnership);
     if (physicsMode === 'main') physicsBackend = 'Main-thread CPU';
     else if (!worker) physicsBackend = 'Main-thread CPU fallback';
     else if (hadWebGPU) physicsBackend = workerResult.backend.includes('C++ WebAssembly')
@@ -559,7 +596,9 @@
     else physicsBackend = 'CPU worker integration + CPU constraints';
     backend = physicsBackend;
     setRuntimeStatus(physicsBackend);
-    return workerResult.data;
+    return transferOwnership
+      ? { data: workerResult.data, edges: workerResult.edges || edges, backend: workerResult.backend, retryRequired: !!workerResult.retryRequired }
+      : workerResult.data;
   }
 
   function integrateWorker(packed, dt, transferOwnership = false) {
