@@ -323,7 +323,8 @@
       device.queue.submit([encoder.finish()]);
       await readback.mapAsync(GPUMapMode.READ, 0, outputSize);
       mapped = true;
-      const ratios = new Float32Array(readback.getMappedRange(0, outputSize).slice(0));
+      // Summarize directly from the mapped readback view; no extra output copy is needed.
+      const ratios = new Float32Array(readback.getMappedRange(0, outputSize));
       return summarizeRatios(ratios, 'WebGPU compute', count);
     } finally {
       if (mapped) {
@@ -405,7 +406,10 @@
       device.queue.submit([encoder.finish()]);
       await readback.mapAsync(GPUMapMode.READ, 0, bytes);
       mapped = true;
-      return new Float32Array(readback.getMappedRange(0, bytes).slice(0));
+      // Copy mapped data back into the caller-owned scratch array so the GPU path
+      // also recycles its body buffer and avoids one new ArrayBuffer per substep.
+      packed.set(new Float32Array(readback.getMappedRange(0, bytes)));
+      return packed;
     } finally {
       if (mapped) { try { readback.unmap(); } catch (_) {} }
       // Buffers are intentionally retained for the next physics substep.
