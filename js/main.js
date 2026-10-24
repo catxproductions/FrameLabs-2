@@ -1678,16 +1678,19 @@ function finishDebrisCollisionFragments(fragments){
  if(sim.debris.length>MAX_DEBRIS){sim.debris.sort((a,b)=>Number(b.settled)-Number(a.settled)||b.age-a.age);sim.debris.splice(0,sim.debris.length-MAX_DEBRIS)}
 }
 async function resolveDebrisCollisions(dt){
- if(sim.debris.length<2)return;const activeSimulation=sim,cellSize=STORY_HEIGHT*1.25,buckets=new Map(),pairs=new Set(),live=sim.debris.slice(),debrisById=new Map(live.map(d=>[d.id,d]));
+ if(sim.debris.length<2)return;const activeSimulation=sim,cellSize=STORY_HEIGHT*1.25,buckets=new Map(),pairs=new Set(),live=sim.debris.slice(),indexById=new Map(live.map((d,i)=>[d.id,i]));
  for(const d of live){updateDebrisBounds(d);const b=d.collisionBounds,x0=Math.floor(b.left/cellSize),x1=Math.floor(b.right/cellSize),y0=Math.floor(b.bottom/cellSize),y1=Math.floor(b.top/cellSize);for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++){const k=`${x}:${y}`;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(d)}}
- for(const bucket of buckets.values())for(let i=0;i<bucket.length;i++)for(let j=i+1;j<bucket.length;j++){const a=bucket[i],b=bucket[j];if(a===b)continue;const key=a.id<b.id?`${a.id}:${b.id}`:`${b.id}:${a.id}`;pairs.add(key)}
-
- const wasmPairIndices=[],indexById=new Map(live.map((d,i)=>[d.id,i]));
- for(const pairKey of pairs){
-  const ids=pairKey.split(':').map(Number),idA=ids[0],idB=ids[1],ia=indexById.get(idA),ib=indexById.get(idB),a=debrisById.get(idA),b=debrisById.get(idB);
-  if(!a||!b||ia==null||ib==null)continue;
-  wasmPairIndices.push(ia,ib);
+ // Encode each unique ordered (lower-id, higher-id) pair as one number. This
+ // keeps deterministic solver ordering but avoids allocating/splitting strings
+ // for every spatial-hash candidate on dense debris frames.
+ for(const bucket of buckets.values())for(let i=0;i<bucket.length;i++)for(let j=i+1;j<bucket.length;j++){
+  const a=bucket[i],b=bucket[j];if(a===b)continue;
+  let ia=indexById.get(a.id),ib=indexById.get(b.id);if(ia==null||ib==null)continue;
+  if(a.id>b.id){const tmp=ia;ia=ib;ib=tmp;}
+  pairs.add(ia*live.length+ib);
  }
+ const wasmPairIndices=[];
+ for(const pairIndex of pairs){wasmPairIndices.push(Math.floor(pairIndex/live.length),pairIndex%live.length);}
  // Worker transfer overhead only pays off for a substantial collision batch.
  if(wasmPairIndices.length>=32&&window.FrameLabCompute?.resolveDebrisPairs){
   const stride=19,packed=new Float64Array(live.length*stride),wasSettled=live.map(d=>!!d.settled),materialLibrary=PHYSICS_MODEL?.materials||{};
@@ -1736,7 +1739,7 @@ async function resolveDebrisCollisions(dt){
   }
  }
  const fragments=[];
- for(const pairKey of pairs){const [idA,idB]=pairKey.split(':').map(Number),a=debrisById.get(idA),b=debrisById.get(idB);if(!a||!b||!sim.debris.includes(a)||!sim.debris.includes(b))continue;if(a.settled&&b.settled)continue;
+ for(const pairIndex of pairs){const ia=Math.floor(pairIndex/live.length),ib=pairIndex%live.length,a=live[ia],b=live[ib];if(!a||!b||!sim.debris.includes(a)||!sim.debris.includes(b))continue;if(a.settled&&b.settled)continue;
   const ba=a.collisionBounds,bb=b.collisionBounds;if(ba.right<bb.left||bb.right<ba.left||ba.top<bb.bottom||bb.top<ba.bottom)continue;
   const dx=b.x-a.x,dy=b.y-a.y,rvCenterX=b.vx-a.vx,rvCenterY=b.vy-a.vy,axes=[[Math.cos(a.angle),Math.sin(a.angle)],[-Math.sin(a.angle),Math.cos(a.angle)],[Math.cos(b.angle),Math.sin(b.angle)],[-Math.sin(b.angle),Math.cos(b.angle)]];let minOverlap=Infinity,nx=0,ny=0,closingOverlap=Infinity,closingNx=0,closingNy=0,separated=false;
   for(const axis of axes){const [ax,ay]=axis,projection=dx*ax+dy*ay,dist=Math.abs(projection),ra=debrisProjectionRadius(a,ax,ay),rb=debrisProjectionRadius(b,ax,ay),overlap=ra+rb-dist;if(overlap<=0){separated=true;break}const sign=projection>=0?1:-1,cx=ax*sign,cy=ay*sign;if(overlap<minOverlap){minOverlap=overlap;nx=cx;ny=cy}if(rvCenterX*cx+rvCenterY*cy<-.015&&overlap<closingOverlap){closingOverlap=overlap;closingNx=cx;closingNy=cy}}
@@ -1749,7 +1752,7 @@ async function resolveDebrisCollisions(dt){
    }}
   if(normalImpulse>.08){if(a.settled&&normalImpulse>.3){a.settled=false;a.grounded=false}if(b.settled&&normalImpulse>.3){b.settled=false;b.grounded=false}}
   const closing=Math.max(0,-vn),reducedMass=imA+imB>0?1/(imA+imB):0,energy=.5*reducedMass*closing*closing;
-  const stamp=`debris-impact:${pairKey}`,freshImpact=sim.time-(sim.collisionPairs[stamp]??-Infinity)>.18;if(closing>.8&&energy>.05&&freshImpact){sim.collisionPairs[stamp]=sim.time;const damageA=Math.min(.35,energy/Math.max(1,a.durability||1)*.22),damageB=Math.min(.35,energy/Math.max(1,b.durability||1)*.22);a.integrity=clamp((a.integrity??1)-damageA,0,1);b.integrity=clamp((b.integrity??1)-damageB,0,1);a.impactCount=(a.impactCount||0)+1;b.impactCount=(b.impactCount||0)+1;a.reason=a.reason||'debris collision';b.reason=b.reason||'debris collision';if((energy>Math.max(1,(a.durability||1)*.85)||a.integrity<.12)&&a.fragmentDepth<2)fragments.push([a,energy]);if((energy>Math.max(1,(b.durability||1)*.85)||b.integrity<.12)&&b.fragmentDepth<2)fragments.push([b,energy]);}
+  const impactPairKey=a.id<b.id?`${a.id}:${b.id}`:`${b.id}:${a.id}`,stamp=`debris-impact:${impactPairKey}`,freshImpact=sim.time-(sim.collisionPairs[stamp]??-Infinity)>.18;if(closing>.8&&energy>.05&&freshImpact){sim.collisionPairs[stamp]=sim.time;const damageA=Math.min(.35,energy/Math.max(1,a.durability||1)*.22),damageB=Math.min(.35,energy/Math.max(1,b.durability||1)*.22);a.integrity=clamp((a.integrity??1)-damageA,0,1);b.integrity=clamp((b.integrity??1)-damageB,0,1);a.impactCount=(a.impactCount||0)+1;b.impactCount=(b.impactCount||0)+1;a.reason=a.reason||'debris collision';b.reason=b.reason||'debris collision';if((energy>Math.max(1,(a.durability||1)*.85)||a.integrity<.12)&&a.fragmentDepth<2)fragments.push([a,energy]);if((energy>Math.max(1,(b.durability||1)*.85)||b.integrity<.12)&&b.fragmentDepth<2)fragments.push([b,energy]);}
   a.vx=clamp(a.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vx=clamp(b.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);a.vy=clamp(a.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vy=clamp(b.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);updateDebrisBounds(a);updateDebrisBounds(b);
  }
  finishDebrisCollisionFragments(fragments);
