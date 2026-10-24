@@ -361,7 +361,7 @@
   async function resolveDebrisPairs(bodies, pairs, moisture = 0) {
     if (!(bodies instanceof Float64Array) || bodies.length % 19 !== 0 ||
         !(pairs instanceof Uint32Array) || pairs.length % 2 !== 0) {
-      throw new TypeError('Debris collision solve requires 17-value Float64 bodies and uint32 index pairs.');
+      throw new TypeError('Debris collision solve requires 19-value Float64 bodies and uint32 index pairs.');
     }
     if (!pairs.length || physicsMode === 'main' || !worker) return null;
     const id = ++sequence;

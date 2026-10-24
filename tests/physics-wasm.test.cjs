@@ -165,3 +165,42 @@ test('C++ debris collision solver separates overlapping bodies and reports impac
     api.reset_alloc();
   }
 });
+
+
+test('C++ debris solver preserves ordered wake-up contacts within a batch', async () => {
+  const api = await loadKernel();
+  const stride = 19;
+  const makeBody = (x, vx, settled) => [
+    x, 0, vx, 0, 0, 0, 2, 1, 1, settled ? 1 : 0,
+    10, 1, 0, 0.6, 0.35, 0.12, 0.2, 1, 0
+  ];
+  // Body 0 and body 2 start settled and overlapping. The first pair's impact
+  // should wake body 0, allowing the later 0-2 pair to be resolved this pass.
+  const bodies = new Float64Array([
+    ...makeBody(0, 0, true),
+    ...makeBody(1.5, -4, false),
+    ...makeBody(-1.5, 0, true)
+  ]);
+  const pairs = new Uint32Array([0, 1, 0, 2]);
+  api.reset_alloc();
+  try {
+    const bodiesPtr = api.alloc(bodies.byteLength);
+    const pairsPtr = api.alloc(pairs.byteLength);
+    const eventsPtr = api.alloc(8 * Float64Array.BYTES_PER_ELEMENT);
+    assert.ok(bodiesPtr && pairsPtr && eventsPtr);
+    new Float64Array(api.memory.buffer, bodiesPtr, bodies.length).set(bodies);
+    new Uint32Array(api.memory.buffer, pairsPtr, pairs.length).set(pairs);
+    assert.equal(api.resolve_debris_pairs(bodiesPtr, pairsPtr, eventsPtr, 3, 2, 0), 0);
+    const solved = new Float64Array(bodies.length);
+    solved.set(new Float64Array(api.memory.buffer, bodiesPtr, bodies.length));
+    const events = new Float64Array(8);
+    events.set(new Float64Array(api.memory.buffer, eventsPtr, events.length));
+    assert.equal(events[0], 1, 'the first pair should collide');
+    assert.equal(events[4], 1, 'the second pair should be tested after body 0 wakes');
+    assert.equal(solved[9], 0, 'the first collision should wake body 0');
+    assert.equal(solved[stride * 2 + 9], 0, 'the later collision should wake body 2');
+    assert.ok(events[6] > 0, 'the later pair should report closing speed');
+  } finally {
+    api.reset_alloc();
+  }
+});
