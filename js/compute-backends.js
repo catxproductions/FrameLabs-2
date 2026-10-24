@@ -486,12 +486,16 @@
   }
 
 
-  async function resolveDebrisPairs(bodies, pairs, moisture = 0) {
+  async function resolveDebrisPairs(bodies, pairs, moisture = 0, options = {}) {
     if (!(bodies instanceof Float64Array) || bodies.length % 19 !== 0 ||
         !(pairs instanceof Uint32Array) || pairs.length % 2 !== 0) {
       throw new TypeError('Debris collision solve requires 19-value Float64 bodies and uint32 index pairs.');
     }
     if (!pairs.length || physicsMode === 'main' || !worker) return null;
+    const expectedBodyLength = bodies.length, expectedPairLength = pairs.length;
+    const transferOwnership = options && options.transferOwnership === true &&
+      bodies.byteOffset === 0 && bodies.byteLength === bodies.buffer.byteLength &&
+      pairs.byteOffset === 0 && pairs.byteLength === pairs.buffer.byteLength;
     const id = ++sequence;
     return new Promise((resolve, reject) => {
       pending.set(id, {
@@ -505,7 +509,7 @@
             0, Number.isInteger(message.bodyLength) ? message.bodyLength : message.bodies.byteLength / Float64Array.BYTES_PER_ELEMENT);
           const events = new Float64Array(message.events,
             0, Number.isInteger(message.eventLength) ? message.eventLength : message.events.byteLength / Float64Array.BYTES_PER_ELEMENT);
-          if (resultBodies.length !== bodies.length || events.length !== pairs.length * 2) {
+          if (resultBodies.length !== expectedBodyLength || events.length !== expectedPairLength * 2) {
             resolve(null);
             return;
           }
@@ -519,7 +523,8 @@
         reject
       });
       try {
-        const bodyCopy = new Float64Array(bodies), pairCopy = new Uint32Array(pairs);
+        const bodyCopy = transferOwnership ? bodies : new Float64Array(bodies);
+        const pairCopy = transferOwnership ? pairs : new Uint32Array(pairs);
         computeStats.transferredBytes += bodyCopy.byteLength + pairCopy.byteLength;
         worker.postMessage({
           id, type: 'resolveDebrisPairs', bodies: bodyCopy.buffer,
