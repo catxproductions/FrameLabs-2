@@ -6,7 +6,7 @@ const BODY_STRIDE = 13;
 
 let wasmLoadPromise = null;
 
-// Initialize while idle. Failed fetches leave the existing JavaScript kernels active.
+// Initialize while idle. Failed fetches leave the JavaScript worker kernels active.
 if (typeof fetch === 'function' && typeof WebAssembly === 'object') {
   wasmLoadPromise = (async () => {
     try {
@@ -65,9 +65,9 @@ function projectConstraintsJS(nodes, edges, iterations) {
       if (sum <= 0) continue;
       const gain = Math.max(0, Math.min(1.5, edges[q + 3]));
       const error = (dist - Math.max(0.001, edges[q + 2])) / dist;
-      const corrX = dx * error * gain, corrY = dy * error * gain;
-      nodes[a] += corrX * wa / sum; nodes[a + 1] += corrY * wa / sum;
-      nodes[b] -= corrX * wb / sum; nodes[b + 1] -= corrY * wb / sum;
+      const cx = dx * error * gain, cy = dy * error * gain;
+      nodes[a] += cx * wa / sum; nodes[a + 1] += cy * wa / sum;
+      nodes[b] -= cx * wb / sum; nodes[b + 1] -= cy * wb / sum;
     }
   }
   for (let e = 0; e < edges.length / 4; e++) {
@@ -94,7 +94,6 @@ function runWasmConstraints(api, nodes, edges, iterations) {
     const nodesPtr = api.alloc(nodes.byteLength);
     const edgesPtr = api.alloc(edges.byteLength);
     if (!nodesPtr || !edgesPtr) return null;
-    // Create views only after both allocations because an allocation may grow Wasm memory.
     new Float64Array(api.memory.buffer, nodesPtr, nodes.length).set(nodes);
     new Float64Array(api.memory.buffer, edgesPtr, edges.length).set(edges);
     if (api.project_constraints(nodesPtr, edgesPtr, nodes.length / 5, edges.length / 4, Number(iterations) || 1) !== 0) return null;
@@ -110,6 +109,78 @@ function runWasmConstraints(api, nodes, edges, iterations) {
 
 function handlePhysicsRequest(payload, api) {
   const { id } = payload;
+  if (payload.type === 'integrateBodies') {
+    try {
+      const wasmData = runWasmIntegration(api, payload.data, payload.dt);
+      const data = wasmData || integrateBodies(payload.data, payload.dt);
+      self.postMessage({
+        id, type: 'integrateBodies',
+        backend: wasmData ? 'C++ WebAssembly · CPU worker physics' : 'CPU worker physics',
+        data: data.buffer
+      }, [data.buffer]);
+    } catch (error) {
+      self.postMessage({ id, error: error?.message || 'CPU physics integration failed.' });
+    }
+    return;
+  }
+
+  if (payload.type === 'projectConstraints') {
+    try {
+      if (!(payload.nodes instanceof ArrayBuffer) || !(payload.edges instanceof ArrayBuffer) ||
+          payload.nodes.byteLength % (5 * Float64Array.BYTES_PER_ELEMENT) !== 0 ||
+          payload.edges.byteLength % (4 * Float64Array.BYTES_PER_ELEMENT) !== 0) {
+        throw new Error('Invalid node/link state sent to CPU constraint worker.');
+      }
+      const nodes = new Float64Array(payload.nodes), edges = new Float64Array(payload.edges);
+      const iterations = Math.max(1, Math.min(32, Math.trunc(Number(payload.iterations) || 1)));
+      const wasmData = runWasmConstraints(api, nodes, edges, iterations);
+      const data = wasmData || projectConstraintsJS(nodes, edges, iterations);
+      self.postMessage({
+        id, type: 'projectConstraints',
+        backend: wasmData ? 'C++ WebAssembly · CPU worker constraints' : 'CPU worker constraints',
+        data: data.buffer
+      }, [data.buffer]);
+    } catch (error) {
+      self.postMessage({ id, error: error?.message || 'CPU constraint projection failed.' });
+    }
+  }
+}
+
+
+function integrateBodies(buffer, dt) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength % (BODY_STRIDE * Float32Array.BYTES_PER_ELEMENT) !== 0) {
+    throw new Error('Invalid packed body state sent to CPU physics worker.');
+  }
+  const data = new Float32Array(buffer);
+  const step = Math.max(0, Math.min(0.05, Number(dt) || 0));
+  for (let i = 0; i < data.length / BODY_STRIDE; i++) {
+    const b = i * BODY_STRIDE;
+    const maxVX = Math.max(0, Number(data[b + 10]) || 0);
+    const maxVY = Math.max(0, Number(data[b + 11]) || 0);
+    const maxOmega = Math.max(0, Number(data[b + 12]) || 0);
+    const vx = Math.max(-maxVX, Math.min(maxVX, (Number(data[b + 2]) || 0) + (Number(data[b + 4]) || 0) * step));
+    const vy = Math.max(-maxVY, Math.min(maxVY, (Number(data[b + 3]) || 0) + (Number(data[b + 5]) || 0) * step));
+    const damping = Math.max(0, Math.min(1, Number(data[b + 9]) || 0));
+    const omegaStep = Math.max(-maxOmega, Math.min(maxOmega, (Number(data[b + 7]) || 0) + (Number(data[b + 8]) || 0) * step));
+    const omega = omegaStep * damping;
+    data[b + 2] = vx;
+    data[b + 3] = vy;
+    data[b] += vx * step;
+    data[b + 1] += vy * step;
+    data[b + 7] = omega;
+    data[b + 6] += omega * step;
+  }
+  return data;
+}
+
+self.onmessage = (event) => {
+  const payload = event.data || {};
+  const { id, demands, capacities } = payload;
+  if (!Number.isInteger(id)) {
+    self.postMessage({ id, error: 'Invalid compute request ID.' });
+    return;
+  }
+
   if (payload.type === 'integrateBodies' || payload.type === 'projectConstraints') {
     const execute = (api) => handlePhysicsRequest(payload, api);
     if (wasmLoadPromise) wasmLoadPromise.then(execute).catch(() => execute(null));
