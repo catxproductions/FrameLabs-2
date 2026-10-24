@@ -148,7 +148,8 @@ test('simulation uses fixed 120 Hz physics substeps and exposes immersive fullsc
   assert.match(html, /data-mode="tether"/);
   assert.match(js, /DT=1\/120/);
   assert.match(js, /physicsAccumulator/);
-  assert.match(js, /MAX_PHYSICS_STEPS_PER_FRAME=8/);
+  assert.match(js, /MAX_PHYSICS_STEPS_PER_FRAME=4/);
+  assert.match(js, /If physics falls behind, the next animation frame services the bounded backlog/);
   assert.match(js, /function runPerformanceBenchmark\(\)/);
   assert.match(js, /function beginGravityTether\(/);
   assert.match(js, /function drawContactShadows\(/);
@@ -278,12 +279,18 @@ test('live physics backend exposes selectable mode and a working main-CPU integr
 
 test('actual node and debris motion paths use the compute backend, not only the member diagnostic scan', () => {
   const js = read('js/main.js');
-  assert.match(js, /async function integrateMotionBatch\(packed,dt\)/);
+  assert.match(js, /async function integrateMotionBatch\(packed,dt,scratchKey='nodeMotionPacked',rebuildFallback=null\)/);
   assert.match(js, /async function updateMemberPhysics\(dt\)/);
   assert.match(js, /async function updateDebris\(dt\)/);
-  assert.match(js, /await integrateMotionBatch\(packed,dt\)/);
-  assert.match(js, /await window\.FrameLabCompute\.projectConstraints\(state,new Float64Array\(edgeRows\),QUALITY_PROFILE\.constraintIterations\)/);
-  assert.match(read('js/compute-backends.js'), /worker\.postMessage\(\{ id, type: 'projectConstraints'/);
+  assert.match(js, /await integrateMotionBatch\(packed,dt,'nodeMotionPacked'/);
+  assert.match(js, /await integrateMotionBatch\(packed,dt,'debrisMotionPacked'/);
+  assert.match(js, /await window\.FrameLabCompute\.projectConstraints\(state,edges,QUALITY_PROFILE\.constraintIterations,\{transferOwnership:true\}\)/);
+  assert.match(js, /function buildDebrisMemberCollisionIndex\(\)/);
+  assert.match(js, /queryDebrisMemberCollisionLinks\(collisionIndex\.columns/);
+  assert.match(js, /queryDebrisMemberCollisionLinks\(collisionIndex\.floors/);
+  assert.match(read('js/compute-worker.js'), /Number\.isInteger\(payload\.nodeLength\)/);
+  assert.match(read('js/compute-worker.js'), /edges: edges\.buffer/);
+  assert.match(read('js/compute-backends.js'), /worker\.postMessage\(\{\s*id, type: 'projectConstraints'/);
   assert.match(js, /await updateMemberPhysics\(dt\)[\s\S]*await updateDebris\(dt\)/);
   assert.match(js, /async function processPhysicsSteps\(\)/);
   assert.match(read('index.html'), /id="computeMode"/);
@@ -504,7 +511,7 @@ test('debris collision hot path is routed to optional C++ WebAssembly with JavaS
   const cpp = read('cpp/physics_core.cpp');
   assert.match(main, /await resolveDebrisCollisions\(dt\)/);
   assert.match(main, /FrameLabCompute\?\.resolveDebrisPairs/);
-  assert.match(backend, /async function resolveDebrisPairs\(bodies, pairs, moisture = 0\)/);
+  assert.match(backend, /async function resolveDebrisPairs\(bodies, pairs, moisture = 0, options = \{\}\)/);
   assert.match(worker, /payload\.type === 'resolveDebrisPairs'/);
   assert.match(cpp, /int resolve_debris_pairs\(/);
   assert.match(main, /finishDebrisCollisionFragments\(fragments\)/);
@@ -522,4 +529,337 @@ test('wind affects structural demand and uses the sustained-overload failure pat
   assert.match(js, /if\(util>1\)\{sim\.overloadTimers/);
   assert.match(model, /function windMemberDemand\(/);
   assert.match(html, /Sustained severe wind can weaken and break vulnerable members/);
+});
+
+
+test('CPU worker reuses the transferred input buffer and respects its active body length', () => {
+  const workerSource = read('js/compute-worker.js');
+  const replies = [];
+  const self = { postMessage: (message) => replies.push(message) };
+  vm.runInNewContext(workerSource, { self, ArrayBuffer, Float32Array, Math, Number }, { filename: 'compute-worker-buffer-reuse.test.js' });
+  const scratch = new ArrayBuffer(256);
+  const body = new Float32Array(scratch);
+  body.set([1, 2, 1, -2, 2, 10, 0.5, 1, 2, 0.5, 3, 4, 5]);
+  body[13] = 9876;
+  self.onmessage({ data: { id: 91, type: 'integrateBodies', dt: 0.05, data: scratch, length: 13 } });
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].data, scratch, 'worker returns the same transferred buffer instead of allocating a result buffer');
+  assert.equal(replies[0].length, 13, 'caller receives the active view length even when buffer capacity is larger');
+  const result = new Float32Array(replies[0].data);
+  assert.ok(Math.abs(result[0] - 1.055) < 1e-6);
+  assert.equal(result[13], 9876, 'unused scratch capacity is not integrated');
+});
+
+test('performance backend pools GPU buffers, benchmarks crossover sizes, and exposes diagnostics', () => {
+  const backend = read('js/compute-backends.js');
+  const main = read('js/main.js');
+  assert.match(backend, /const gpuBuffers = \{ body: \{\}, scan: \{\} \}/);
+  assert.match(backend, /function ensureGPUBuffer\(/);
+  assert.match(backend, /let gpuBodyQueue = Promise\.resolve\(\)/);
+  assert.match(backend, /let gpuScanQueue = Promise\.resolve\(\)/);
+  assert.match(backend, /async function integrateGPUUnlocked\(/);
+  assert.match(backend, /async function scanGPUUnlocked\(/);
+  assert.match(backend, /GPU_BENCHMARK_COUNTS = \[256, 1024, 4096\]/);
+  assert.match(backend, /measurements\.slice\(i\)\.every\(sample => sample\.preferGPU\)/);
+  assert.match(backend, /getDiagnostics: \(\) => \(\{/);
+  assert.match(backend, /setRuntimeStatus\(text\)/);
+  assert.match(backend, /options\.transferOwnership === true/);
+  assert.match(backend, /options && options\.transferOwnership === true/);
+  assert.match(main, /resolveDebrisPairs\(packed,pairIndices,ENVIRONMENT\.moisture,\{transferOwnership:true\}\)/);
+  assert.match(main, /pairs\.add\(ia\*live\.length\+ib\)/);
+  assert.match(main, /acquireScratchArray\('constraintNodes'/);
+  assert.match(main, /acquireScratchArray\('constraintEdges'/);
+  assert.match(main, /transferOwnership:true/);
+  assert.match(main, /const MAX_PHYSICS_STEPS_PER_FRAME=4/);
+  assert.doesNotMatch(main, /if\(sim\.running&&physicsAccumulator\+1e-9>=DT\)void processPhysicsSteps\(\)/);
+});
+
+test('compute diagnostics remain usable without WebGPU or workers', () => {
+  const source = read('js/compute-backends.js');
+  const window = {};
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: () => null
+  };
+  vm.runInNewContext(source, { window, document, navigator: {}, Float32Array, Float64Array, ArrayBuffer, URL }, { filename: 'compute-backends-diagnostics.test.js' });
+  const diagnostics = window.FrameLabCompute.getDiagnostics();
+  assert.equal(diagnostics.mode, 'auto');
+  assert.equal(diagnostics.autoGPUThreshold, null);
+  assert.equal(diagnostics.gpuState, 'not initialized');
+  assert.equal(diagnostics.bodyBufferCapacityBytes, 0);
+});
+
+
+test('large debris solver can transfer exact input batches without backend copies', async () => {
+  const source = read('js/compute-backends.js');
+  const status = { textContent: '' };
+  const requests = [];
+  class TransferWorkerMock {
+    constructor(url) { this.url = String(url); }
+    postMessage(message, transfer = []) {
+      requests.push({ message, transfer });
+      if (message.type !== 'resolveDebrisPairs') return;
+      const events = new Float64Array((new Uint32Array(message.pairs).length / 2) * 4);
+      events[0] = 1; events[1] = 0.5; events[2] = 2; events[3] = 1;
+      queueMicrotask(() => this.onmessage?.({ data: {
+        id: message.id, type: message.type,
+        backend: 'C++ WebAssembly · debris collision solver',
+        bodies: message.bodies, events: events.buffer
+      } }));
+    }
+    terminate() {}
+  }
+  const window = { Worker: TransferWorkerMock };
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: (id) => id === 'computeMetric' ? status : null
+  };
+  vm.runInNewContext(source, {
+    window, document, navigator: {}, Worker: TransferWorkerMock,
+    Float32Array, Float64Array, Uint32Array, ArrayBuffer, URL
+  }, { filename: 'compute-backends-debris-transfer.test.js' });
+  window.FrameLabCompute.setMode('cpu');
+  const bodies = new Float64Array(19 * 2);
+  bodies[6] = 2; bodies[7] = 1; bodies[8] = 1; bodies[17] = 1;
+  bodies[19 + 6] = 2; bodies[19 + 7] = 1; bodies[19 + 8] = 1; bodies[19 + 17] = 1;
+  const pairs = new Uint32Array([0, 1]);
+  const bodyBuffer = bodies.buffer, pairBuffer = pairs.buffer;
+  const result = await window.FrameLabCompute.resolveDebrisPairs(bodies, pairs, 0, { transferOwnership: true });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].message.bodies, bodyBuffer, 'the original exact body buffer is sent to the worker');
+  assert.equal(requests[0].message.pairs, pairBuffer, 'the original exact pair buffer is sent to the worker');
+  assert.ok(requests[0].transfer.includes(bodyBuffer) && requests[0].transfer.includes(pairBuffer));
+  assert.equal(result.bodies.length, 38);
+  assert.equal(result.events.length, 4);
+  const diagnostics = window.FrameLabCompute.getDiagnostics();
+  assert.equal(diagnostics.wasmDebrisBatches, 1);
+  assert.ok(diagnostics.transferredBytes >= bodyBuffer.byteLength + pairBuffer.byteLength);
+});
+
+
+test('constraint worker compacts oversized scratch and supports exact zero-copy transfers', async () => {
+  const backendSource = read('js/compute-backends.js');
+  const workerSource = read('js/compute-worker.js');
+  const status = { textContent: '' };
+  const requests = [];
+  class ConstraintWorkerMock {
+    constructor() {
+      const owner = this;
+      const self = { postMessage: (data) => queueMicrotask(() => owner.onmessage?.({ data })) };
+      vm.runInNewContext(workerSource, { self, ArrayBuffer, Float32Array, Float64Array, Math, Number }, { filename: 'constraint-worker-transfer.test.js' });
+      this.workerOnMessage = self.onmessage;
+    }
+    postMessage(message, transfer = []) {
+      requests.push({ message, transfer });
+      queueMicrotask(() => this.workerOnMessage({ data: message }));
+    }
+    terminate() {}
+  }
+  const window = { Worker: ConstraintWorkerMock };
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: (id) => id === 'computeMetric' ? status : null
+  };
+  vm.runInNewContext(backendSource, {
+    window, document, navigator: {}, Worker: ConstraintWorkerMock, URL,
+    Float32Array, Float64Array, Uint32Array, ArrayBuffer
+  }, { filename: 'compute-backends-constraint-transfer.test.js' });
+  window.FrameLabCompute.setMode('cpu');
+  const nodeBuffer = new ArrayBuffer(1024), edgeBuffer = new ArrayBuffer(1024);
+  const nodes = new Float64Array(nodeBuffer, 0, 10);
+  nodes.set([0, 0, 0, 0, 1, 2, 0, 2, 0, 1]);
+  const edges = new Float64Array(edgeBuffer, 0, 4);
+  edges.set([0, 1, 1, 1]);
+  const result = await window.FrameLabCompute.projectConstraints(nodes, edges, 1, { transferOwnership: true });
+  assert.equal(requests.length, 1);
+  assert.notEqual(requests[0].message.nodes, nodeBuffer, 'oversized scratch capacity is compacted before transfer');
+  assert.notEqual(requests[0].message.edges, edgeBuffer, 'oversized edge capacity is compacted before transfer');
+  assert.equal(requests[0].message.nodes.byteLength, 80);
+  assert.equal(requests[0].message.edges.byteLength, 32);
+  assert.ok(requests[0].transfer.includes(requests[0].message.nodes) && requests[0].transfer.includes(requests[0].message.edges));
+  assert.equal(requests[0].message.nodeLength, 10);
+  assert.equal(requests[0].message.edgeLength, 4);
+  assert.equal(result.data.length, 10);
+  assert.equal(result.edges.length, 4);
+  assert.ok(Math.abs(result.data[0] - 0.5) < 1e-9);
+  assert.ok(Math.abs(result.data[5] - 1.5) < 1e-9);
+
+  const exactNodes = new Float64Array([0, 0, 0, 0, 1, 2, 0, 2, 0, 1]);
+  const exactEdges = new Float64Array([0, 1, 1, 1]);
+  const exactNodeBuffer = exactNodes.buffer, exactEdgeBuffer = exactEdges.buffer;
+  const exactResult = await window.FrameLabCompute.projectConstraints(exactNodes, exactEdges, 1, { transferOwnership: true });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].message.nodes, exactNodeBuffer, 'exact-sized node buffers transfer without a duplicate');
+  assert.equal(requests[1].message.edges, exactEdgeBuffer, 'exact-sized edge buffers transfer without a duplicate');
+  assert.equal(exactResult.data.length, 10);
+  assert.equal(exactResult.edges.length, 4);
+});
+
+
+test('debris-to-structure spatial index keeps nearby contacts and excludes remote members', () => {
+  const main = read('js/main.js');
+  const start = main.indexOf('function buildDebrisMemberCollisionIndex()');
+  const end = main.indexOf('async function updateDebris(dt)', start);
+  assert.ok(start >= 0 && end > start, 'collision index helpers are defined before debris integration');
+  const nearColumn = { id: 'near-column', nodeA: 'c0', nodeB: 'c1', e: { kind: 'column', failed: false, snapped: false, integrity: 1 } };
+  const nearBeam = { id: 'near-beam', nodeA: 'c1', nodeB: 'c2', e: { kind: 'beam', failed: false, snapped: false, integrity: 1 } };
+  const remoteColumn = { id: 'remote-column', nodeA: 'r0', nodeB: 'r1', e: { kind: 'column', failed: false, snapped: false, integrity: 1 } };
+  const failedBeam = { id: 'failed-beam', nodeA: 'c1', nodeB: 'c2', e: { kind: 'beam', failed: true, snapped: false, integrity: 0 } };
+  const sim = {
+    nodes: {
+      c0: { position: { x: 1, y: 0 } },
+      c1: { position: { x: 1, y: 3.15 } },
+      c2: { position: { x: 3, y: 3.15 } },
+      r0: { position: { x: 80, y: 0 } },
+      r1: { position: { x: 80, y: 3.15 } }
+    },
+    memberLinks: [nearColumn, nearBeam, remoteColumn, failedBeam]
+  };
+  const context = { sim, STORY_HEIGHT: 3.15, FLOOR_THICKNESS: 0.12, Map, Set, Math };
+  vm.runInNewContext(
+    main.slice(start, end) + '\nthis.buildIndex = buildDebrisMemberCollisionIndex; this.query = queryDebrisMemberCollisionLinks;',
+    context,
+    { filename: 'debris-collision-index.test.js' }
+  );
+  const index = context.buildIndex();
+  const columns = context.query(index.columns, index.cellSize, 0.5, 1.5, 0.7, 2.1);
+  const floors = context.query(index.floors, index.cellSize, 1.4, 2.6, 2.9, 3.4);
+  assert.deepEqual(Array.from(columns, link => link.id), ['near-column']);
+  assert.deepEqual(Array.from(floors, link => link.id), ['near-beam']);
+});
+
+
+test('mock WebGPU integration and diagnostics reuse GPU buffers without changing physics results', async () => {
+  const source = read('js/compute-backends.js');
+  const status = { textContent: '' };
+  const createdBuffers = [];
+  let submissions = 0;
+  const bufferUsage = { STORAGE: 1, COPY_DST: 2, COPY_SRC: 4, UNIFORM: 8, MAP_READ: 16 };
+  const mapMode = { READ: 1 };
+
+  const device = {
+    limits: { maxBufferSize: 1 << 20, maxStorageBufferBindingSize: 1 << 20 },
+    lost: new Promise(() => {}),
+    createBuffer({ size, usage }) {
+      const buffer = {
+        size, usage, storage: new ArrayBuffer(size), mapped: false, destroyed: false,
+        destroy() { this.destroyed = true; },
+        async mapAsync(_mode, offset = 0, length = size - offset) {
+          if (this.destroyed || offset + length > this.size) throw new Error('invalid map range');
+          this.mapped = true;
+        },
+        getMappedRange(offset = 0, length = size - offset) {
+          if (!this.mapped || this.destroyed) throw new Error('buffer is not mapped');
+          return this.storage.slice(offset, offset + length);
+        },
+        unmap() { this.mapped = false; }
+      };
+      createdBuffers.push(buffer);
+      return buffer;
+    },
+    createShaderModule({ code }) { return { code }; },
+    async createComputePipelineAsync({ compute }) {
+      return { code: compute.module.code, getBindGroupLayout() { return {}; } };
+    },
+    createBindGroup({ entries }) {
+      return { entries: Object.fromEntries(entries.map(entry => [entry.binding, entry.resource.buffer])) };
+    },
+    createCommandEncoder() {
+      const encoder = { pass: null, copies: [] };
+      encoder.beginComputePass = () => {
+        const pass = { pipeline: null, bindGroup: null,
+          setPipeline(pipeline) { this.pipeline = pipeline; },
+          setBindGroup(_index, bindGroup) { this.bindGroup = bindGroup; },
+          dispatchWorkgroups() {},
+          end() {}
+        };
+        encoder.pass = pass;
+        return pass;
+      };
+      encoder.copyBufferToBuffer = (from, fromOffset, to, toOffset, size) => {
+        encoder.copies.push({ from, fromOffset, to, toOffset, size });
+      };
+      encoder.finish = () => encoder;
+      return encoder;
+    },
+    queue: {
+      writeBuffer(buffer, offset, data) {
+        const src = data instanceof ArrayBuffer
+          ? new Uint8Array(data)
+          : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        new Uint8Array(buffer.storage, offset, src.byteLength).set(src);
+      },
+      submit(commands) {
+        submissions++;
+        for (const command of commands) {
+          const pass = command.pass;
+          if (pass) {
+            const bind = pass.bindGroup.entries, code = pass.pipeline.code;
+            if (code.includes('const STRIDE: u32 = 13u')) {
+              const bodies = new Float32Array(bind[0].storage), params = new DataView(bind[1].storage);
+              const count = params.getUint32(0, true), dt = params.getFloat32(4, true);
+              const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+              for (let i = 0; i < count; i++) {
+                const b = i * 13, maxVX = Math.max(0, bodies[b + 10]), maxVY = Math.max(0, bodies[b + 11]), maxOmega = Math.max(0, bodies[b + 12]);
+                const vx = clamp(bodies[b + 2] + bodies[b + 4] * dt, -maxVX, maxVX);
+                const vy = clamp(bodies[b + 3] + bodies[b + 5] * dt, -maxVY, maxVY);
+                const omegaStep = clamp(bodies[b + 7] + bodies[b + 8] * dt, -maxOmega, maxOmega);
+                const omega = omegaStep * clamp(bodies[b + 9], 0, 1);
+                bodies[b + 2] = vx; bodies[b + 3] = vy;
+                bodies[b] += vx * dt; bodies[b + 1] += vy * dt;
+                bodies[b + 7] = omega; bodies[b + 6] += omega * dt;
+              }
+            } else {
+              const input = new Float32Array(bind[0].storage), ratios = new Float32Array(bind[1].storage);
+              const count = new Uint32Array(bind[2].storage)[0];
+              for (let i = 0; i < count; i++) ratios[i] = Math.max(input[i * 2], 0) / Math.max(input[i * 2 + 1], 0.01);
+            }
+          }
+          for (const copy of command.copies) {
+            new Uint8Array(copy.to.storage, copy.toOffset, copy.size)
+              .set(new Uint8Array(copy.from.storage, copy.fromOffset, copy.size));
+          }
+        }
+      }
+    }
+  };
+  const adapter = { async requestDevice() { return device; } };
+  const window = {};
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: (id) => id === 'computeMetric' ? status : null
+  };
+  const navigator = { gpu: { async requestAdapter() { return adapter; } } };
+  vm.runInNewContext(source, {
+    window, document, navigator, URL, Float32Array, Float64Array, Uint32Array, ArrayBuffer, DataView,
+    Math, Number, Map, Set, performance, GPUBufferUsage: bufferUsage, GPUMapMode: mapMode
+  }, { filename: 'compute-backends-mock-gpu.test.js' });
+  window.FrameLabCompute.setMode('gpu');
+
+  const original = new Float32Array([1, 2, 1, -2, 2, 10, 0.5, 1, 2, 0.5, 3, 4, 5]);
+  const first = await window.FrameLabCompute.integrateBodies(new Float32Array(original), 0.05);
+  assert.equal(first.backend, 'WebGPU physics');
+  assert.ok(Math.abs(first.data[0] - 1.055) < 1e-6);
+  const afterFirstIntegration = createdBuffers.length;
+  const second = await window.FrameLabCompute.integrateBodies(new Float32Array(original), 0.05);
+  assert.equal(second.backend, 'WebGPU physics');
+  assert.equal(createdBuffers.length, afterFirstIntegration, 'body storage/uniform/readback buffers are reused');
+
+  const demand = new Float32Array(2048).fill(2), capacity = new Float32Array(2048).fill(1);
+  const firstScan = await window.FrameLabCompute.scan(demand, capacity);
+  assert.equal(firstScan.backend, 'WebGPU compute');
+  assert.equal(firstScan.maxUtil, 2);
+  const afterFirstScan = createdBuffers.length;
+  const secondScan = await window.FrameLabCompute.scan(demand, capacity);
+  assert.equal(secondScan.backend, 'WebGPU compute');
+  assert.equal(secondScan.meanUtil, 2);
+  assert.equal(createdBuffers.length, afterFirstScan, 'diagnostic input/output/readback/uniform buffers are reused');
+  const diagnostics = window.FrameLabCompute.getDiagnostics();
+  assert.equal(diagnostics.gpuIntegrationCalls, 2);
+  assert.ok(diagnostics.transferredBytes >= 0);
+  assert.ok(submissions >= 4, 'each GPU call submits a compute pass');
 });

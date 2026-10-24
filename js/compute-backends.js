@@ -10,8 +10,10 @@
     : new URL('./js/compute-backends.js', document.baseURI).href;
   const workerURL = new URL('./compute-worker.js', scriptURL);
   const GPU_THRESHOLD = 2048;
-  const GPU_BODY_THRESHOLD = 256;
-  let autoPreferGPU = false; // Conservative until a real body-integration benchmark proves otherwise.
+  const GPU_BENCHMARK_COUNTS = [256, 1024, 4096];
+  let autoPreferGPU = false;
+  let autoGPUThreshold = Infinity;
+  let gpuBodyLimitBytes = Infinity;
   const BODY_STRIDE = 13; // x,y,vx,vy,ax,ay,angle,omega,alpha,angular damping,max vx,max vy,max omega
 
   let worker = null;
@@ -25,11 +27,92 @@
   let gpuInitPromise = null;
   let sequence = 0;
   const pending = new Map();
+  const gpuBuffers = { body: {}, scan: {} };
+  // Pooled GPU buffers are mutable singletons. Serialize each pool's submissions
+  // so overlapping scans/benchmarks cannot map or overwrite a buffer in use.
+  let gpuBodyQueue = Promise.resolve();
+  let gpuScanQueue = Promise.resolve();
+  const computeStats = {
+    gpuIntegrationCalls: 0, workerIntegrationCalls: 0, wasmIntegrationCalls: 0,
+    mainThreadIntegrationCalls: 0, workerConstraintCalls: 0, wasmConstraintCalls: 0,
+    wasmDebrisBatches: 0, workerFailures: 0, gpuFallbacks: 0,
+    transferredBytes: 0, lastIntegrationBackend: 'not started'
+  };
+  let runtimeStatusTimer = null;
+  let runtimeStatusPending = '';
 
   const statusEl = () => document.getElementById('computeMetric');
   function setStatus(text) {
+    if (runtimeStatusTimer !== null && typeof window.clearTimeout === 'function') {
+      window.clearTimeout(runtimeStatusTimer);
+    }
+    runtimeStatusTimer = null;
+    runtimeStatusPending = '';
     const el = statusEl();
-    if (el) el.textContent = text;
+    const value = String(text ?? '');
+    if (el && el.textContent !== value) el.textContent = value;
+  }
+  // Hot physics paths update their internal backend state every substep, but
+  // touching the DOM several hundred times per second adds needless main-thread
+  // work. Coalesce status-only UI updates to at most four times per second.
+  function setRuntimeStatus(text) {
+    runtimeStatusPending = String(text ?? '');
+    if (runtimeStatusTimer !== null) return;
+    if (typeof window.setTimeout !== 'function') {
+      setStatus(runtimeStatusPending);
+      return;
+    }
+    runtimeStatusTimer = window.setTimeout(() => {
+      runtimeStatusTimer = null;
+      const value = runtimeStatusPending;
+      runtimeStatusPending = '';
+      const el = statusEl();
+      if (el && value && el.textContent !== value) el.textContent = value;
+    }, 250);
+  }
+  class GPUBufferLimitError extends RangeError {
+    constructor(message, limitBytes = Infinity) {
+      super(message);
+      this.name = 'GPUBufferLimitError';
+      if (Number.isFinite(Number(limitBytes)) && Number(limitBytes) >= 0) this.limitBytes = Number(limitBytes);
+    }
+  }
+  function destroyBufferPool(pool) {
+    for (const key of Object.keys(pool)) {
+      if (key.endsWith('Capacity')) continue;
+      try { pool[key]?.destroy?.(); } catch (_) {}
+      pool[key] = null;
+    }
+    for (const key of Object.keys(pool)) if (key.endsWith('Capacity')) pool[key] = 0;
+  }
+  function clearGPUBufferPools() {
+    destroyBufferPool(gpuBuffers.body);
+    destroyBufferPool(gpuBuffers.scan);
+  }
+  function ensureGPUBuffer(device, pool, key, requiredSize, usage, maxSize = Infinity) {
+    if (!Number.isSafeInteger(requiredSize) || requiredSize <= 0) {
+      throw new RangeError('GPU buffer size must be a positive integer.');
+    }
+    const hardLimit = Math.min(
+      Number(device.limits?.maxBufferSize) || Infinity,
+      Number(maxSize) || Infinity
+    );
+    if (requiredSize > hardLimit) {
+      throw new GPUBufferLimitError(`Requested GPU buffer (${requiredSize} bytes) exceeds this adapter's limit (${hardLimit} bytes).`, hardLimit);
+    }
+    const capacityKey = `${key}Capacity`;
+    if (pool[key] && (pool[capacityKey] || 0) >= requiredSize) return pool[key];
+    try { pool[key]?.destroy?.(); } catch (_) {}
+    pool[key] = null;
+    pool[capacityKey] = 0;
+    let capacity = Math.max(256, 2 ** Math.ceil(Math.log2(requiredSize)));
+    if (capacity > hardLimit) capacity = requiredSize;
+    if (capacity % 4) capacity = Math.ceil(capacity / 4) * 4;
+    if (capacity > hardLimit) capacity = requiredSize;
+    const buffer = device.createBuffer({ size: capacity, usage });
+    pool[key] = buffer;
+    pool[capacityKey] = capacity;
+    return buffer;
   }
   function finiteNonNegative(value) {
     const n = Number(value);
@@ -78,6 +161,7 @@
   }
   function disableWorker(reason) {
     if (worker) {
+      computeStats.workerFailures++;
       worker.onmessage = null;
       worker.onerror = null;
       worker.onmessageerror = null;
@@ -176,6 +260,10 @@
         gpuPipeline = null;
         gpuIntegratePipeline = null;
         gpuInitPromise = null;
+        autoPreferGPU = false;
+        autoGPUThreshold = Infinity;
+        gpuBodyLimitBytes = Infinity;
+        clearGPUBufferPools();
         gpuState = `lost${info && info.message ? `: ${info.message}` : ''}`;
         backend = worker ? 'Web Worker (CPU)' : 'Main-thread fallback';
         setStatus(`${backend} · GPU unavailable`);
@@ -186,15 +274,18 @@
       gpuPipeline = null;
       gpuIntegratePipeline = null;
       gpuInitPromise = null;
+      autoPreferGPU = false;
+      autoGPUThreshold = Infinity;
+      gpuBodyLimitBytes = Infinity;
+      clearGPUBufferPools();
       throw error;
     });
     return gpuInitPromise;
   }
 
-  async function scanGPU(demands, capacities) {
+  async function scanGPUUnlocked(demands, capacities) {
     await initGPU();
-    const device = gpuDevice;
-    const pipeline = gpuPipeline;
+    const device = gpuDevice, pipeline = gpuPipeline;
     if (!device || !pipeline) throw new Error('GPU not ready');
     const count = demands.length;
     if (count === 0) return { backend: 'WebGPU compute', count: 0, maxUtil: 0, meanUtil: 0, overloaded: 0 };
@@ -205,20 +296,26 @@
       packed[i * 2 + 1] = Math.max(0.01, finiteNonNegative(capacities[i]));
     }
 
-    let input, output, readback, uniform, mapped = false;
+    const inputBytes = packed.byteLength;
+    const outputSize = count * Float32Array.BYTES_PER_ELEMENT;
+    let mapped = false;
+    const input = ensureGPUBuffer(device, gpuBuffers.scan, 'input', inputBytes,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, device.limits.maxStorageBufferBindingSize);
+    const output = ensureGPUBuffer(device, gpuBuffers.scan, 'output', outputSize,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, device.limits.maxStorageBufferBindingSize);
+    const readback = ensureGPUBuffer(device, gpuBuffers.scan, 'readback', outputSize,
+      GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+    const uniform = ensureGPUBuffer(device, gpuBuffers.scan, 'uniform', 4,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
     try {
-      input = device.createBuffer({ size: packed.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-      const outputSize = count * Float32Array.BYTES_PER_ELEMENT;
-      output = device.createBuffer({ size: outputSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-      readback = device.createBuffer({ size: outputSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-      uniform = device.createBuffer({ size: 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       device.queue.writeBuffer(input, 0, packed);
       device.queue.writeBuffer(uniform, 0, new Uint32Array([count]));
       const bindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: input } },
-          { binding: 1, resource: { buffer: output } },
+          { binding: 0, resource: { buffer: input, size: inputBytes } },
+          { binding: 1, resource: { buffer: output, size: outputSize } },
           { binding: 2, resource: { buffer: uniform } }
         ]
       });
@@ -230,18 +327,37 @@
       pass.end();
       encoder.copyBufferToBuffer(output, 0, readback, 0, outputSize);
       device.queue.submit([encoder.finish()]);
-      await readback.mapAsync(GPUMapMode.READ);
+      await readback.mapAsync(GPUMapMode.READ, 0, outputSize);
       mapped = true;
-      const ratios = new Float32Array(readback.getMappedRange().slice(0));
+      // Summarize directly from the mapped readback view; no extra output copy is needed.
+      const ratios = new Float32Array(readback.getMappedRange(0, outputSize));
       return summarizeRatios(ratios, 'WebGPU compute', count);
     } finally {
-      if (mapped && readback) {
+      if (mapped) {
         try { readback.unmap(); } catch (_) {}
       }
-      for (const buffer of [input, output, readback, uniform]) {
-        try { buffer?.destroy(); } catch (_) {}
-      }
+      // Keep GPU buffers around between scans; destroy/replace only on growth,
+      // device loss, or a genuine backend failure.
     }
+  }
+
+  async function scanGPU(demands, capacities) {
+    const previous = gpuScanQueue;
+    let release;
+    gpuScanQueue = new Promise(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await scanGPUUnlocked(demands, capacities);
+    } catch (error) {
+      // Retire an invalid/lost pool before allowing the next queued scan to start.
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        autoPreferGPU = false; autoGPUThreshold = Infinity;
+        clearGPUBufferPools();
+      }
+      throw error;
+    } finally { release(); }
   }
 
   function integrateCPU(packed, dt) {
@@ -266,39 +382,73 @@
     return packed;
   }
 
-  async function integrateGPU(packed, dt) {
+  async function integrateGPUUnlocked(packed, dt) {
     await initGPU();
     const device = gpuDevice, pipeline = gpuIntegratePipeline;
     if (!device || !pipeline) throw new Error('WebGPU physics pipeline is not ready');
     const count = packed.length / BODY_STRIDE;
     if (!count) return packed;
     const bytes = packed.byteLength;
-    if (bytes > device.limits.maxStorageBufferBindingSize || bytes > device.limits.maxBufferSize) {
-      throw new Error("Physics batch exceeds this GPU adapter's storage-buffer limit");
+    const maxStateBytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
+    if (bytes > maxStateBytes) {
+      throw new GPUBufferLimitError("Physics batch exceeds this GPU adapter's storage-buffer limit", maxStateBytes);
     }
-    let state, uniform, readback, mapped = false;
+    let mapped = false;
+    // Reuse storage/uniform/readback buffers across fixed 120 Hz steps. Creating
+    // and destroying three GPU buffers every call was needless allocator churn.
+    const state = ensureGPUBuffer(device, gpuBuffers.body, 'state', bytes,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, maxStateBytes);
+    const uniform = ensureGPUBuffer(device, gpuBuffers.body, 'uniform', 16,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const readback = ensureGPUBuffer(device, gpuBuffers.body, 'readback', bytes,
+      GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
     try {
-      state = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
-      uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-      readback = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       device.queue.writeBuffer(state, 0, packed);
       const params = new ArrayBuffer(16), view = new DataView(params);
-      view.setUint32(0, count, true); view.setFloat32(4, Math.max(0, Math.min(0.05, Number(dt) || 0)), true);
+      view.setUint32(0, count, true);
+      view.setFloat32(4, Math.max(0, Math.min(0.05, Number(dt) || 0)), true);
       device.queue.writeBuffer(uniform, 0, params);
       const bindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: state } }, { binding: 1, resource: { buffer: uniform } }]
+        entries: [
+          { binding: 0, resource: { buffer: state, size: bytes } },
+          { binding: 1, resource: { buffer: uniform } }
+        ]
       });
       const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-      pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(Math.ceil(count / 64)); pass.end();
+      pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(Math.ceil(count / 64)); pass.end();
       encoder.copyBufferToBuffer(state, 0, readback, 0, bytes);
       device.queue.submit([encoder.finish()]);
-      await readback.mapAsync(GPUMapMode.READ); mapped = true;
-      return new Float32Array(readback.getMappedRange().slice(0));
+      await readback.mapAsync(GPUMapMode.READ, 0, bytes);
+      mapped = true;
+      // Copy mapped data back into the caller-owned scratch array so the GPU path
+      // also recycles its body buffer and avoids one new ArrayBuffer per substep.
+      packed.set(new Float32Array(readback.getMappedRange(0, bytes)));
+      return packed;
     } finally {
-      if (mapped && readback) { try { readback.unmap(); } catch (_) {} }
-      for (const buffer of [state, uniform, readback]) { try { buffer?.destroy(); } catch (_) {} }
+      if (mapped) { try { readback.unmap(); } catch (_) {} }
+      // Buffers are intentionally retained for the next physics substep.
     }
+  }
+
+  async function integrateGPU(packed, dt) {
+    const previous = gpuBodyQueue;
+    let release;
+    gpuBodyQueue = new Promise(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await integrateGPUUnlocked(packed, dt);
+    } catch (error) {
+      // Do not release the queue with destroyed buffers still referenced by the pool.
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        autoPreferGPU = false; autoGPUThreshold = Infinity;
+        clearGPUBufferPools();
+      }
+      throw error;
+    } finally { release(); }
   }
 
   function projectConstraintsCPU(nodes, edges, iterations) {
@@ -339,31 +489,81 @@
     return nodes;
   }
 
-  function projectConstraintsWorker(nodes, edges, iterations) {
-    if (!worker) return Promise.resolve({ data: projectConstraintsCPU(nodes, edges, iterations), backend: 'Main-thread CPU fallback' });
+  function projectConstraintsWorker(nodes, edges, iterations, transferOwnership = false) {
+    if (!worker) return Promise.resolve({
+      data: projectConstraintsCPU(nodes, edges, iterations), edges, backend: 'Main-thread CPU fallback'
+    });
     const id = ++sequence;
+    const canTransfer = transferOwnership && nodes.byteOffset === 0 && edges.byteOffset === 0 &&
+      nodes.buffer.byteLength <= nodes.byteLength * 1.25 &&
+      edges.buffer.byteLength <= edges.byteLength * 1.25;
+    const nodePayload = canTransfer ? nodes : new Float64Array(nodes);
+    const edgePayload = canTransfer ? edges : new Float64Array(edges);
+    const nodeLength = nodePayload.length, edgeLength = edgePayload.length;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve: (message) => {
-        if (!message || !(message.data instanceof ArrayBuffer)) { reject(new Error('CPU worker returned an invalid constraint result')); return; }
-        resolve({ data: new Float64Array(message.data), backend: message.backend || 'CPU worker constraints' });
+        if (!message || !(message.data instanceof ArrayBuffer)) {
+          reject(new Error('CPU worker returned an invalid constraint result')); return;
+        }
+        const returnedNodeLength = Number.isInteger(message.nodeLength)
+          ? message.nodeLength : message.data.byteLength / Float64Array.BYTES_PER_ELEMENT;
+        if (returnedNodeLength !== nodeLength || returnedNodeLength * Float64Array.BYTES_PER_ELEMENT > message.data.byteLength) {
+          reject(new Error('CPU worker returned an invalid active constraint-node length')); return;
+        }
+        let returnedEdges = null;
+        if (message.edges instanceof ArrayBuffer) {
+          const returnedEdgeLength = Number.isInteger(message.edgeLength)
+            ? message.edgeLength : message.edges.byteLength / Float64Array.BYTES_PER_ELEMENT;
+          if (returnedEdgeLength !== edgeLength || returnedEdgeLength * Float64Array.BYTES_PER_ELEMENT > message.edges.byteLength) {
+            reject(new Error('CPU worker returned an invalid active constraint-edge length')); return;
+          }
+          returnedEdges = new Float64Array(message.edges, 0, returnedEdgeLength);
+        }
+        if (canTransfer && !returnedEdges) {
+          reject(new Error('CPU worker did not return the transferred constraint-edge buffer')); return;
+        }
+        computeStats.workerConstraintCalls++;
+        if (String(message.backend || '').includes('C++ WebAssembly')) computeStats.wasmConstraintCalls++;
+        if (message.data instanceof ArrayBuffer) computeStats.transferredBytes += message.data.byteLength;
+        if (message.edges instanceof ArrayBuffer) computeStats.transferredBytes += message.edges.byteLength;
+        resolve({
+          data: new Float64Array(message.data, 0, returnedNodeLength),
+          edges: returnedEdges,
+          backend: message.backend || 'CPU worker constraints'
+        });
       }, reject });
       try {
-        const nodeCopy = new Float64Array(nodes), edgeCopy = new Float64Array(edges);
-        worker.postMessage({ id, type: 'projectConstraints', nodes: nodeCopy.buffer, edges: edgeCopy.buffer, iterations }, [nodeCopy.buffer, edgeCopy.buffer]);
+        computeStats.transferredBytes += nodePayload.byteLength + edgePayload.byteLength;
+        worker.postMessage({
+          id, type: 'projectConstraints', nodes: nodePayload.buffer, edges: edgePayload.buffer,
+          nodeLength, edgeLength, iterations
+        }, [nodePayload.buffer, edgePayload.buffer]);
       } catch (error) { pending.delete(id); reject(error); }
     }).catch((error) => {
       if (worker) disableWorker(error);
-      return { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), backend: 'Main-thread CPU fallback' };
+      if (canTransfer) {
+        // Input views are detached; let the caller repack from authoritative node objects.
+        return { data: null, edges: null, backend: 'Main-thread CPU fallback', retryRequired: true };
+      }
+      return {
+        data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations),
+        edges: new Float64Array(edges),
+        backend: 'Main-thread CPU fallback'
+      };
     });
   }
 
 
-  async function resolveDebrisPairs(bodies, pairs, moisture = 0) {
+  async function resolveDebrisPairs(bodies, pairs, moisture = 0, options = {}) {
     if (!(bodies instanceof Float64Array) || bodies.length % 19 !== 0 ||
         !(pairs instanceof Uint32Array) || pairs.length % 2 !== 0) {
       throw new TypeError('Debris collision solve requires 19-value Float64 bodies and uint32 index pairs.');
     }
     if (!pairs.length || physicsMode === 'main' || !worker) return null;
+    const expectedBodyLength = bodies.length, expectedPairLength = pairs.length;
+    const transferOwnership = options && options.transferOwnership === true &&
+      bodies.byteOffset === 0 && bodies.byteLength === bodies.buffer.byteLength &&
+      pairs.byteOffset === 0 && pairs.byteLength === pairs.buffer.byteLength;
     const id = ++sequence;
     return new Promise((resolve, reject) => {
       pending.set(id, {
@@ -373,21 +573,27 @@
             resolve(null);
             return;
           }
-          const resultBodies = new Float64Array(message.bodies);
-          const events = new Float64Array(message.events);
-          if (resultBodies.length !== bodies.length || events.length !== pairs.length * 2) {
+          const resultBodies = new Float64Array(message.bodies,
+            0, Number.isInteger(message.bodyLength) ? message.bodyLength : message.bodies.byteLength / Float64Array.BYTES_PER_ELEMENT);
+          const events = new Float64Array(message.events,
+            0, Number.isInteger(message.eventLength) ? message.eventLength : message.events.byteLength / Float64Array.BYTES_PER_ELEMENT);
+          if (resultBodies.length !== expectedBodyLength || events.length !== expectedPairLength * 2) {
             resolve(null);
             return;
           }
           physicsBackend = message.backend;
           backend = message.backend;
-          setStatus(message.backend + ' · ' + (pairs.length / 2) + ' debris pairs');
+          computeStats.wasmDebrisBatches++;
+          computeStats.transferredBytes += message.bodies.byteLength + message.events.byteLength;
+          setRuntimeStatus(message.backend + ' · ' + (pairs.length / 2) + ' debris pairs');
           resolve({ backend: message.backend, bodies: resultBodies, events });
         },
         reject
       });
       try {
-        const bodyCopy = new Float64Array(bodies), pairCopy = new Uint32Array(pairs);
+        const bodyCopy = transferOwnership ? bodies : new Float64Array(bodies);
+        const pairCopy = transferOwnership ? pairs : new Uint32Array(pairs);
+        computeStats.transferredBytes += bodyCopy.byteLength + pairCopy.byteLength;
         worker.postMessage({
           id, type: 'resolveDebrisPairs', bodies: bodyCopy.buffer,
           pairs: pairCopy.buffer, moisture: Number(moisture) || 0
@@ -402,16 +608,17 @@
     });
   }
 
-  async function projectConstraints(nodes, edges, iterations) {
+  async function projectConstraints(nodes, edges, iterations, options = {}) {
     if (!(nodes instanceof Float64Array) || nodes.length % 5 !== 0 || !(edges instanceof Float64Array) || edges.length % 4 !== 0) {
       throw new TypeError('Constraint projection requires Float64 node state (5 values per node) and edge state (4 values per link).');
     }
     for (let i = 0; i < nodes.length; i++) if (!Number.isFinite(nodes[i])) nodes[i] = 0;
     for (let i = 0; i < edges.length; i++) if (!Number.isFinite(edges[i])) edges[i] = 0;
+    const transferOwnership = options && options.transferOwnership === true;
     const hadWebGPU = physicsBackend.includes('WebGPU');
     const workerResult = physicsMode === 'main'
-      ? { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), backend: 'Main-thread CPU' }
-      : await projectConstraintsWorker(nodes, edges, iterations);
+      ? { data: projectConstraintsCPU(new Float64Array(nodes), new Float64Array(edges), iterations), edges, backend: 'Main-thread CPU' }
+      : await projectConstraintsWorker(nodes, edges, iterations, transferOwnership);
     if (physicsMode === 'main') physicsBackend = 'Main-thread CPU';
     else if (!worker) physicsBackend = 'Main-thread CPU fallback';
     else if (hadWebGPU) physicsBackend = workerResult.backend.includes('C++ WebAssembly')
@@ -420,100 +627,205 @@
     else if (workerResult.backend.includes('C++ WebAssembly')) physicsBackend = 'C++ WebAssembly integration + constraints (CPU worker)';
     else physicsBackend = 'CPU worker integration + CPU constraints';
     backend = physicsBackend;
-    setStatus(physicsBackend);
-    return workerResult.data;
+    setRuntimeStatus(physicsBackend);
+    return transferOwnership
+      ? { data: workerResult.data, edges: workerResult.edges || edges, backend: workerResult.backend, retryRequired: !!workerResult.retryRequired }
+      : workerResult.data;
   }
 
-  function integrateWorker(packed, dt) {
-    if (!worker) return Promise.resolve({ data: integrateCPU(packed, dt), backend: 'Main-thread CPU fallback' });
+  function integrateWorker(packed, dt, transferOwnership = false) {
+    if (!worker) {
+      computeStats.mainThreadIntegrationCalls++;
+      return Promise.resolve({ data: integrateCPU(packed, dt), backend: 'Main-thread CPU fallback' });
+    }
     const id = ++sequence;
+    const canTransfer = transferOwnership && packed.byteOffset === 0 &&
+      packed.buffer.byteLength <= packed.byteLength * 1.25;
+    const payload = canTransfer ? packed : new Float32Array(packed);
+    const activeLength = payload.length;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve: (data) => {
-        if (!data || !(data.data instanceof ArrayBuffer || ArrayBuffer.isView(data.data))) {
+      pending.set(id, { resolve: (message) => {
+        if (!message || !(message.data instanceof ArrayBuffer || ArrayBuffer.isView(message.data))) {
           reject(new Error('CPU worker returned an invalid physics result')); return;
         }
-        resolve({
-          data: data.data instanceof ArrayBuffer ? new Float32Array(data.data) : new Float32Array(data.data),
-          backend: data.backend || 'CPU worker physics'
-        });
+        let data;
+        if (message.data instanceof ArrayBuffer) {
+          const length = Number.isInteger(message.length) ? message.length : message.data.byteLength / Float32Array.BYTES_PER_ELEMENT;
+          if (length < 0 || length > message.data.byteLength / Float32Array.BYTES_PER_ELEMENT || length % BODY_STRIDE !== 0) {
+            reject(new Error('CPU worker returned an invalid active body length')); return;
+          }
+          data = new Float32Array(message.data, 0, length);
+          computeStats.transferredBytes += message.data.byteLength;
+        } else {
+          data = new Float32Array(message.data);
+        }
+        if (data.length !== activeLength) {
+          reject(new Error('CPU worker returned an unexpected body count')); return;
+        }
+        computeStats.workerIntegrationCalls++;
+        if (String(message.backend || '').includes('C++ WebAssembly')) computeStats.wasmIntegrationCalls++;
+        computeStats.lastIntegrationBackend = message.backend || 'CPU worker physics';
+        resolve({ data, backend: message.backend || 'CPU worker physics' });
       }, reject });
       try {
-        const payload = new Float32Array(packed);
-        worker.postMessage({ id, type: 'integrateBodies', dt, data: payload.buffer }, [payload.buffer]);
+        computeStats.transferredBytes += payload.buffer.byteLength;
+        worker.postMessage({
+          id, type: 'integrateBodies', dt, length: activeLength, data: payload.buffer
+        }, [payload.buffer]);
       } catch (error) { pending.delete(id); reject(error); }
     }).catch((error) => {
       if (worker) disableWorker(error);
+      // A transferred buffer is no longer readable after a worker crash. The caller
+      // can repack state from its authoritative objects and ask the CPU fallback to retry.
+      if (canTransfer) return { data: null, backend: 'CPU worker lost; repack required' };
+      computeStats.mainThreadIntegrationCalls++;
+      computeStats.lastIntegrationBackend = 'Main-thread CPU fallback';
       return { data: integrateCPU(new Float32Array(packed), dt), backend: 'Main-thread CPU fallback' };
     });
   }
 
-  async function integrateBodies(packed, dt) {
+  async function integrateBodies(packed, dt, options = {}) {
     if (!(packed instanceof Float32Array) || packed.length % BODY_STRIDE !== 0) {
       throw new TypeError(`Physics integration requires a Float32Array with ${BODY_STRIDE} values per body.`);
     }
     if (!Number.isFinite(Number(dt)) || dt < 0 || dt > 0.05) throw new RangeError('Physics dt must be between 0 and 0.05 seconds.');
     if (packed.length === 0) return { data: packed, backend: 'No dynamic bodies' };
     for (let i = 0; i < packed.length; i++) if (!Number.isFinite(packed[i])) packed[i] = 0;
-    const useGPU = physicsMode === 'gpu' || (physicsMode === 'auto' && autoPreferGPU && packed.length / BODY_STRIDE >= GPU_BODY_THRESHOLD && navigator.gpu && gpuState !== 'unavailable');
+    const transferOwnership = options && options.transferOwnership === true;
+    const count = packed.length / BODY_STRIDE;
+    const gpuBatchFits = packed.byteLength <= gpuBodyLimitBytes;
+    const useGPU = gpuBatchFits && (physicsMode === 'gpu' ||
+      (physicsMode === 'auto' && autoPreferGPU && count >= autoGPUThreshold &&
+       navigator.gpu && gpuState !== 'unavailable'));
     if (useGPU && navigator.gpu && gpuState !== 'unavailable') {
       try {
         const result = await integrateGPU(packed, dt);
+        computeStats.gpuIntegrationCalls++;
+        computeStats.lastIntegrationBackend = 'WebGPU physics';
         physicsBackend = 'WebGPU physics';
         backend = physicsBackend;
-        setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
+        setRuntimeStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
         return { data: result, backend: physicsBackend };
       } catch (error) {
-        gpuState = 'unavailable'; gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
-        if (physicsMode === 'gpu') setStatus(`WebGPU failed; using CPU · ${error?.message || 'GPU error'}`);
+        computeStats.gpuFallbacks++;
+        if (error instanceof GPUBufferLimitError) {
+          const reportedLimit = Number(error.limitBytes);
+          const strideBytes = BODY_STRIDE * Float32Array.BYTES_PER_ELEMENT;
+          const safeLimit = Number.isFinite(reportedLimit)
+            ? Math.floor(reportedLimit / strideBytes) * strideBytes
+            : Math.max(0, packed.byteLength - strideBytes);
+          gpuBodyLimitBytes = Math.min(gpuBodyLimitBytes, Math.max(0, safeLimit));
+          setRuntimeStatus('WebGPU batch exceeds adapter limit; using CPU for this batch');
+        } else {
+          gpuState = 'unavailable'; gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+          autoPreferGPU = false; autoGPUThreshold = Infinity; gpuBodyLimitBytes = Infinity; clearGPUBufferPools();
+          if (physicsMode === 'gpu') setStatus(`WebGPU failed; using CPU · ${error?.message || 'GPU error'}`);
+        }
       }
     }
     if (physicsMode === 'main') {
+      computeStats.mainThreadIntegrationCalls++;
       const result = integrateCPU(new Float32Array(packed), dt);
+      computeStats.lastIntegrationBackend = 'Main-thread CPU';
       physicsBackend = 'Main-thread CPU'; backend = physicsBackend;
-      setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
+      setRuntimeStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
       return { data: result, backend: physicsBackend };
     }
-    const workerResult = await integrateWorker(packed, dt);
+    const workerResult = await integrateWorker(packed, dt, transferOwnership);
+    if (!workerResult.data) {
+      return { data: null, backend: workerResult.backend, retryRequired: true };
+    }
     const result = workerResult.data;
     physicsBackend = workerResult.backend;
     backend = physicsBackend;
-    setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
+    setRuntimeStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
     return { data: result, backend: physicsBackend };
   }
 
   async function benchmarkPhysicsBackends() {
     if (!navigator.gpu) {
       autoPreferGPU = false;
-      return { available: false, cpuAverageMs: null, gpuAverageMs: null, preferGPU: false, reason: 'WebGPU unavailable; Auto selects CPU worker' };
+      autoGPUThreshold = Infinity;
+      return { available: false, cpuAverageMs: null, gpuAverageMs: null, preferGPU: false,
+        autoGPUThreshold: null, reason: 'WebGPU unavailable; Auto selects CPU worker' };
     }
-    const count = 1024, packed = new Float32Array(count * BODY_STRIDE);
-    for (let i = 0; i < count; i++) {
-      const b = i * BODY_STRIDE;
-      packed[b] = (i % 37) * 0.03; packed[b + 1] = (i % 29) * 0.02;
-      packed[b + 2] = ((i % 7) - 3) * 0.01; packed[b + 3] = ((i % 11) - 5) * 0.01;
-      packed[b + 4] = ((i % 13) - 6) * 0.2; packed[b + 5] = -9.81;
-      packed[b + 6] = (i % 17) * 0.01; packed[b + 7] = ((i % 5) - 2) * 0.02;
-      packed[b + 8] = 0.1; packed[b + 9] = 0.998;
-      packed[b + 10] = 5; packed[b + 11] = 15; packed[b + 12] = 3.4;
+    const dt = 1 / 120;
+    const measurements = [];
+    function makeBodies(count) {
+      const packed = new Float32Array(count * BODY_STRIDE);
+      for (let i = 0; i < count; i++) {
+        const b = i * BODY_STRIDE;
+        packed[b] = (i % 37) * 0.03; packed[b + 1] = (i % 29) * 0.02;
+        packed[b + 2] = ((i % 7) - 3) * 0.01; packed[b + 3] = ((i % 11) - 5) * 0.01;
+        packed[b + 4] = ((i % 13) - 6) * 0.2; packed[b + 5] = -9.81;
+        packed[b + 6] = (i % 17) * 0.01; packed[b + 7] = ((i % 5) - 2) * 0.02;
+        packed[b + 8] = 0.1; packed[b + 9] = 0.998;
+        packed[b + 10] = 5; packed[b + 11] = 15; packed[b + 12] = 3.4;
+      }
+      return packed;
+    }
+    function median(values) {
+      values.sort((a, b) => a - b);
+      return values[Math.floor(values.length / 2)];
     }
     try {
-      // Warm both paths before timing; timings include worker/GPU round trips just like a live step.
-      await integrateWorker(new Float32Array(packed), 1 / 120);
-      await integrateGPU(new Float32Array(packed), 1 / 120);
-      const cpuSamples = [], gpuSamples = [];
-      for (let run = 0; run < 3; run++) {
-        let start = performance.now(); await integrateWorker(new Float32Array(packed), 1 / 120); cpuSamples.push(Math.max(0.01, performance.now() - start));
-        start = performance.now(); await integrateGPU(new Float32Array(packed), 1 / 120); gpuSamples.push(Math.max(0.01, performance.now() - start));
+      // A GPU win at one size is not enough to justify routing every batch there.
+      for (const count of GPU_BENCHMARK_COUNTS) {
+        const packed = makeBodies(count);
+        await integrateWorker(new Float32Array(packed), dt);
+        await integrateGPU(new Float32Array(packed), dt);
+        const cpuSamples = [], gpuSamples = [];
+        for (let run = 0; run < 3; run++) {
+          const measureCPU = async () => {
+            const start = performance.now();
+            await integrateWorker(new Float32Array(packed), dt);
+            cpuSamples.push(Math.max(0.01, performance.now() - start));
+          };
+          const measureGPU = async () => {
+            const start = performance.now();
+            await integrateGPU(new Float32Array(packed), dt);
+            gpuSamples.push(Math.max(0.01, performance.now() - start));
+          };
+          // Alternate timing order to reduce systematic measurement bias.
+          if (run % 2 === 0) { await measureCPU(); await measureGPU(); }
+          else { await measureGPU(); await measureCPU(); }
+        }
+        const cpuMedianMs = median(cpuSamples), gpuMedianMs = median(gpuSamples);
+        measurements.push({
+          count, cpuAverageMs: cpuMedianMs, gpuAverageMs: gpuMedianMs,
+          preferGPU: gpuMedianMs < cpuMedianMs * 0.85
+        });
       }
-      cpuSamples.sort((a, b) => a - b); gpuSamples.sort((a, b) => a - b);
-      const cpuAverageMs = cpuSamples[1], gpuAverageMs = gpuSamples[1];
-      // Require a 15% win to avoid choosing GPU based on noisy, effectively tied samples.
-      autoPreferGPU = gpuAverageMs < cpuAverageMs * 0.85;
-      return { available: true, count, cpuAverageMs, gpuAverageMs, preferGPU: autoPreferGPU,
-        reason: autoPreferGPU ? 'GPU body integration benchmarked faster' : 'CPU worker matched or beat GPU body integration' };
+      // Require a sustained 15% GPU win at this size and every larger tested size.
+      let crossoverIndex = -1;
+      for (let i = 0; i < measurements.length; i++) {
+        if (measurements[i].preferGPU && measurements.slice(i).every(sample => sample.preferGPU)) {
+          crossoverIndex = i;
+          break;
+        }
+      }
+      autoGPUThreshold = crossoverIndex < 0 ? Infinity : measurements[crossoverIndex].count;
+      autoPreferGPU = Number.isFinite(autoGPUThreshold);
+      const reference = measurements.find(sample => sample.count === 1024) || measurements[measurements.length - 1];
+      return {
+        available: true, count: reference.count,
+        cpuAverageMs: reference.cpuAverageMs, gpuAverageMs: reference.gpuAverageMs,
+        preferGPU: autoPreferGPU, autoGPUThreshold: Number.isFinite(autoGPUThreshold) ? autoGPUThreshold : null,
+        measurements,
+        reason: autoPreferGPU
+          ? `WebGPU repeatedly beats the CPU worker by at least 15% from ${autoGPUThreshold} bodies upward`
+          : 'CPU worker is faster or tied across the tested batch sizes'
+      };
     } catch (error) {
       autoPreferGPU = false;
-      return { available: false, count, cpuAverageMs: null, gpuAverageMs: null, preferGPU: false,
+      autoGPUThreshold = Infinity;
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        clearGPUBufferPools();
+      }
+      return { available: false, count: null, cpuAverageMs: null, gpuAverageMs: null,
+        preferGPU: false, autoGPUThreshold: null,
         reason: `CPU/GPU physics benchmark failed; Auto selects CPU worker (${error?.message || 'compute error'})` };
     }
   }
@@ -552,17 +864,22 @@
         backend = result.backend;
         setStatus(`${backend} · ${result.count} members`);
         return result;
-      } catch (_) {
-        gpuState = 'unavailable';
-        gpuDevice = null;
-        gpuPipeline = null;
-        gpuIntegratePipeline = null;
-        gpuInitPromise = null;
+      } catch (error) {
+        if (!(error instanceof GPUBufferLimitError)) {
+          gpuState = 'unavailable';
+          gpuDevice = null;
+          gpuPipeline = null;
+          gpuIntegratePipeline = null;
+          gpuInitPromise = null;
+          clearGPUBufferPools();
+        } else {
+          setRuntimeStatus('WebGPU diagnostic batch exceeds adapter limits; CPU diagnostic selected');
+        }
       }
     }
     const result = await scanCPU(demands, capacities);
     backend = result.backend;
-    setStatus(`${backend} · ${result.count} members`);
+    setRuntimeStatus(`${backend} · ${result.count} members`);
     return result;
   }
 
@@ -584,8 +901,11 @@
       const averageMs = (samples[0] + samples[1] + samples[2]) / 3;
       return { available: true, averageMs, throughput: count / (averageMs / 1000), reason: 'WebGPU compute available' };
     } catch (error) {
-      gpuState = 'unavailable';
-      gpuDevice = null; gpuPipeline = null; gpuInitPromise = null;
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        clearGPUBufferPools();
+      }
       return { available: false, averageMs: null, throughput: 0, reason: `GPU scan unavailable: ${error?.message || 'initialization failed'}` };
     }
   }
@@ -605,6 +925,14 @@
     resolveDebrisPairs,
     bodyStride: BODY_STRIDE,
     getGPUState: () => gpuState,
+    getDiagnostics: () => ({
+      mode: physicsMode, gpuState,
+      autoGPUThreshold: Number.isFinite(autoGPUThreshold) ? autoGPUThreshold : null,
+      gpuBodyLimitBytes: Number.isFinite(gpuBodyLimitBytes) ? gpuBodyLimitBytes : null,
+      bodyBufferCapacityBytes: gpuBuffers.body.stateCapacity || 0,
+      scanBufferCapacityBytes: gpuBuffers.scan.inputCapacity || 0,
+      ...computeStats
+    }),
     getWorkerURL: () => workerURL.href
   };
 })();

@@ -31,9 +31,8 @@ if (typeof fetch === 'function' && typeof WebAssembly === 'object') {
   })();
 }
 
-function runWasmIntegration(api, buffer, dt) {
-  if (!api || !(buffer instanceof ArrayBuffer)) return null;
-  const source = new Float32Array(buffer);
+function runWasmIntegration(api, source, dt) {
+  if (!api || !(source instanceof Float32Array)) return null;
   if (!source.length || source.length % BODY_STRIDE !== 0) return null;
   try {
     api.reset_alloc();
@@ -41,9 +40,10 @@ function runWasmIntegration(api, buffer, dt) {
     if (!ptr) return null;
     new Float32Array(api.memory.buffer, ptr, source.length).set(source);
     if (api.integrate_bodies(ptr, source.length / BODY_STRIDE, Number(dt)) !== 0) return null;
-    const result = new Float32Array(source.length);
-    result.set(new Float32Array(api.memory.buffer, ptr, source.length));
-    return result;
+    // Copy into the original transferred input buffer. Avoid allocating a second
+    // result array every substep; the same backing buffer goes straight back to main.
+    source.set(new Float32Array(api.memory.buffer, ptr, source.length));
+    return source;
   } catch (_) {
     return null;
   } finally {
@@ -97,9 +97,9 @@ function runWasmConstraints(api, nodes, edges, iterations) {
     new Float64Array(api.memory.buffer, nodesPtr, nodes.length).set(nodes);
     new Float64Array(api.memory.buffer, edgesPtr, edges.length).set(edges);
     if (api.project_constraints(nodesPtr, edgesPtr, nodes.length / 5, edges.length / 4, Number(iterations) || 1) !== 0) return null;
-    const result = new Float64Array(nodes.length);
-    result.set(new Float64Array(api.memory.buffer, nodesPtr, nodes.length));
-    return result;
+    // Update the transferred node buffer in place to avoid a per-pass result allocation.
+    nodes.set(new Float64Array(api.memory.buffer, nodesPtr, nodes.length));
+    return nodes;
   } catch (_) {
     return null;
   } finally {
@@ -126,8 +126,10 @@ function runWasmDebrisPairs(api, bodyBuffer, pairBuffer, moisture) {
     new Float64Array(api.memory.buffer, bodiesPtr, bodyBuffer.byteLength / 8).set(new Float64Array(bodyBuffer));
     new Uint32Array(api.memory.buffer, pairsPtr, pairBuffer.byteLength / 4).set(new Uint32Array(pairBuffer));
     if (api.resolve_debris_pairs(bodiesPtr, pairsPtr, eventsPtr, bodyCount, pairCount, Number(moisture) || 0) !== 0) return null;
-    const bodies = new Float64Array(bodyBuffer.byteLength / 8);
+    const bodies = new Float64Array(bodyBuffer);
     const events = new Float64Array(pairCount * 4);
+    // Return body state through the transferred input buffer; only the compact
+    // per-pair impact event array needs a fresh output allocation.
     bodies.set(new Float64Array(api.memory.buffer, bodiesPtr, bodies.length));
     events.set(new Float64Array(api.memory.buffer, eventsPtr, events.length));
     return { bodies, events };
@@ -159,11 +161,18 @@ function handlePhysicsRequest(payload, api) {
   }
   if (payload.type === 'integrateBodies') {
     try {
-      const wasmData = runWasmIntegration(api, payload.data, payload.dt);
-      const data = wasmData || integrateBodies(payload.data, payload.dt);
+      if (!(payload.data instanceof ArrayBuffer)) throw new Error('Invalid body buffer sent to CPU physics worker.');
+      const length = Number.isInteger(payload.length) ? payload.length : payload.data.byteLength / Float32Array.BYTES_PER_ELEMENT;
+      if (length < 0 || length > payload.data.byteLength / Float32Array.BYTES_PER_ELEMENT || length % BODY_STRIDE !== 0) {
+        throw new Error('Invalid active body length sent to CPU physics worker.');
+      }
+      const source = new Float32Array(payload.data, 0, length);
+      const wasmData = runWasmIntegration(api, source, payload.dt);
+      const data = wasmData || integrateBodies(source, payload.dt);
       self.postMessage({
         id, type: 'integrateBodies',
         backend: wasmData ? 'C++ WebAssembly · CPU worker physics' : 'CPU worker physics',
+        length: data.length,
         data: data.buffer
       }, [data.buffer]);
     } catch (error) {
@@ -174,20 +183,30 @@ function handlePhysicsRequest(payload, api) {
 
   if (payload.type === 'projectConstraints') {
     try {
-      if (!(payload.nodes instanceof ArrayBuffer) || !(payload.edges instanceof ArrayBuffer) ||
-          payload.nodes.byteLength % (5 * Float64Array.BYTES_PER_ELEMENT) !== 0 ||
-          payload.edges.byteLength % (4 * Float64Array.BYTES_PER_ELEMENT) !== 0) {
-        throw new Error('Invalid node/link state sent to CPU constraint worker.');
+      if (!(payload.nodes instanceof ArrayBuffer) || !(payload.edges instanceof ArrayBuffer)) {
+        throw new Error('Invalid node/link buffers sent to CPU constraint worker.');
       }
-      const nodes = new Float64Array(payload.nodes), edges = new Float64Array(payload.edges);
+      const nodeLength = Number.isInteger(payload.nodeLength)
+        ? payload.nodeLength : payload.nodes.byteLength / Float64Array.BYTES_PER_ELEMENT;
+      const edgeLength = Number.isInteger(payload.edgeLength)
+        ? payload.edgeLength : payload.edges.byteLength / Float64Array.BYTES_PER_ELEMENT;
+      if (nodeLength < 0 || nodeLength % 5 !== 0 ||
+          nodeLength > payload.nodes.byteLength / Float64Array.BYTES_PER_ELEMENT ||
+          edgeLength < 0 || edgeLength % 4 !== 0 ||
+          edgeLength > payload.edges.byteLength / Float64Array.BYTES_PER_ELEMENT) {
+        throw new Error('Invalid active node/link state sent to CPU constraint worker.');
+      }
+      const nodes = new Float64Array(payload.nodes, 0, nodeLength);
+      const edges = new Float64Array(payload.edges, 0, edgeLength);
       const iterations = Math.max(1, Math.min(32, Math.trunc(Number(payload.iterations) || 1)));
       const wasmData = runWasmConstraints(api, nodes, edges, iterations);
       const data = wasmData || projectConstraintsJS(nodes, edges, iterations);
       self.postMessage({
         id, type: 'projectConstraints',
         backend: wasmData ? 'C++ WebAssembly · CPU worker constraints' : 'CPU worker constraints',
-        data: data.buffer
-      }, [data.buffer]);
+        data: data.buffer, edges: edges.buffer,
+        nodeLength: data.length, edgeLength: edges.length
+      }, [data.buffer, edges.buffer]);
     } catch (error) {
       self.postMessage({ id, error: error?.message || 'CPU constraint projection failed.' });
     }
@@ -195,11 +214,11 @@ function handlePhysicsRequest(payload, api) {
 }
 
 
-function integrateBodies(buffer, dt) {
-  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength % (BODY_STRIDE * Float32Array.BYTES_PER_ELEMENT) !== 0) {
+function integrateBodies(input, dt) {
+  const data = input instanceof Float32Array ? input : input instanceof ArrayBuffer ? new Float32Array(input) : null;
+  if (!data || data.length % BODY_STRIDE !== 0) {
     throw new Error('Invalid packed body state sent to CPU physics worker.');
   }
-  const data = new Float32Array(buffer);
   const step = Math.max(0, Math.min(0.05, Number(dt) || 0));
   for (let i = 0; i < data.length / BODY_STRIDE; i++) {
     const b = i * BODY_STRIDE;
