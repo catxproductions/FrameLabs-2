@@ -685,3 +685,36 @@ test('constraint worker transfers reusable scratch buffers and preserves active 
   assert.ok(Math.abs(result.data[0] - 0.5) < 1e-9);
   assert.ok(Math.abs(result.data[5] - 1.5) < 1e-9);
 });
+
+
+test('debris-to-structure spatial index keeps nearby contacts and excludes remote members', () => {
+  const main = read('js/main.js');
+  const start = main.indexOf('function buildDebrisMemberCollisionIndex()');
+  const end = main.indexOf('async function updateDebris(dt)', start);
+  assert.ok(start >= 0 && end > start, 'collision index helpers are defined before debris integration');
+  const nearColumn = { id: 'near-column', nodeA: 'c0', nodeB: 'c1', e: { kind: 'column', failed: false, snapped: false, integrity: 1 } };
+  const nearBeam = { id: 'near-beam', nodeA: 'c1', nodeB: 'c2', e: { kind: 'beam', failed: false, snapped: false, integrity: 1 } };
+  const remoteColumn = { id: 'remote-column', nodeA: 'r0', nodeB: 'r1', e: { kind: 'column', failed: false, snapped: false, integrity: 1 } };
+  const failedBeam = { id: 'failed-beam', nodeA: 'c1', nodeB: 'c2', e: { kind: 'beam', failed: true, snapped: false, integrity: 0 } };
+  const sim = {
+    nodes: {
+      c0: { position: { x: 1, y: 0 } },
+      c1: { position: { x: 1, y: 3.15 } },
+      c2: { position: { x: 3, y: 3.15 } },
+      r0: { position: { x: 80, y: 0 } },
+      r1: { position: { x: 80, y: 3.15 } }
+    },
+    memberLinks: [nearColumn, nearBeam, remoteColumn, failedBeam]
+  };
+  const context = { sim, STORY_HEIGHT: 3.15, FLOOR_THICKNESS: 0.12, Map, Set, Math };
+  vm.runInNewContext(
+    main.slice(start, end) + '\nthis.buildIndex = buildDebrisMemberCollisionIndex; this.query = queryDebrisMemberCollisionLinks;',
+    context,
+    { filename: 'debris-collision-index.test.js' }
+  );
+  const index = context.buildIndex();
+  const columns = context.query(index.columns, index.cellSize, 0.5, 1.5, 0.7, 2.1);
+  const floors = context.query(index.floors, index.cellSize, 1.4, 2.6, 2.9, 3.4);
+  assert.deepEqual(Array.from(columns, link => link.id), ['near-column']);
+  assert.deepEqual(Array.from(floors, link => link.id), ['near-beam']);
+});
