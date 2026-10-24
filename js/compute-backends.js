@@ -28,6 +28,10 @@
   let sequence = 0;
   const pending = new Map();
   const gpuBuffers = { body: {}, scan: {} };
+  // Pooled GPU buffers are mutable singletons. Serialize each pool's submissions
+  // so overlapping scans/benchmarks cannot map or overwrite a buffer in use.
+  let gpuBodyQueue = Promise.resolve();
+  let gpuScanQueue = Promise.resolve();
   const computeStats = {
     gpuIntegrationCalls: 0, workerIntegrationCalls: 0, wasmIntegrationCalls: 0,
     mainThreadIntegrationCalls: 0, workerConstraintCalls: 0, wasmConstraintCalls: 0,
@@ -95,6 +99,8 @@
     const capacityKey = `${key}Capacity`;
     if (pool[key] && (pool[capacityKey] || 0) >= requiredSize) return pool[key];
     try { pool[key]?.destroy?.(); } catch (_) {}
+    pool[key] = null;
+    pool[capacityKey] = 0;
     let capacity = Math.max(256, 2 ** Math.ceil(Math.log2(requiredSize)));
     if (capacity > hardLimit) capacity = requiredSize;
     if (capacity % 4) capacity = Math.ceil(capacity / 4) * 4;
@@ -271,7 +277,7 @@
     return gpuInitPromise;
   }
 
-  async function scanGPU(demands, capacities) {
+  async function scanGPUUnlocked(demands, capacities) {
     await initGPU();
     const device = gpuDevice, pipeline = gpuPipeline;
     if (!device || !pipeline) throw new Error('GPU not ready');
@@ -328,6 +334,15 @@
     }
   }
 
+  async function scanGPU(demands, capacities) {
+    const previous = gpuScanQueue;
+    let release;
+    gpuScanQueue = new Promise(resolve => { release = resolve; });
+    await previous;
+    try { return await scanGPUUnlocked(demands, capacities); }
+    finally { release(); }
+  }
+
   function integrateCPU(packed, dt) {
     const step = Math.max(0, Math.min(0.05, Number(dt) || 0));
     for (let i = 0; i < packed.length / BODY_STRIDE; i++) {
@@ -350,7 +365,7 @@
     return packed;
   }
 
-  async function integrateGPU(packed, dt) {
+  async function integrateGPUUnlocked(packed, dt) {
     await initGPU();
     const device = gpuDevice, pipeline = gpuIntegratePipeline;
     if (!device || !pipeline) throw new Error('WebGPU physics pipeline is not ready');
@@ -395,6 +410,15 @@
       if (mapped) { try { readback.unmap(); } catch (_) {} }
       // Buffers are intentionally retained for the next physics substep.
     }
+  }
+
+  async function integrateGPU(packed, dt) {
+    const previous = gpuBodyQueue;
+    let release;
+    gpuBodyQueue = new Promise(resolve => { release = resolve; });
+    await previous;
+    try { return await integrateGPUUnlocked(packed, dt); }
+    finally { release(); }
   }
 
   function projectConstraintsCPU(nodes, edges, iterations) {
