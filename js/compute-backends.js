@@ -340,8 +340,18 @@
     let release;
     gpuScanQueue = new Promise(resolve => { release = resolve; });
     await previous;
-    try { return await scanGPUUnlocked(demands, capacities); }
-    finally { release(); }
+    try {
+      return await scanGPUUnlocked(demands, capacities);
+    } catch (error) {
+      // Retire an invalid/lost pool before allowing the next queued scan to start.
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        autoPreferGPU = false; autoGPUThreshold = Infinity;
+        clearGPUBufferPools();
+      }
+      throw error;
+    } finally { release(); }
   }
 
   function integrateCPU(packed, dt) {
@@ -421,8 +431,18 @@
     let release;
     gpuBodyQueue = new Promise(resolve => { release = resolve; });
     await previous;
-    try { return await integrateGPUUnlocked(packed, dt); }
-    finally { release(); }
+    try {
+      return await integrateGPUUnlocked(packed, dt);
+    } catch (error) {
+      // Do not release the queue with destroyed buffers still referenced by the pool.
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        autoPreferGPU = false; autoGPUThreshold = Infinity;
+        clearGPUBufferPools();
+      }
+      throw error;
+    } finally { release(); }
   }
 
   function projectConstraintsCPU(nodes, edges, iterations) {
