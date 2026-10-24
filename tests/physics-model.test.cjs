@@ -72,3 +72,22 @@ test('quality selection and moisture shading return bounded, deterministic resul
   assert.equal(model.shadeForMoisture('#abcdef', 0), '#abcdef');
   assert.equal(model.shadeForMoisture('not-a-color', 1), 'not-a-color');
 });
+
+
+test('structural wind demand is speed-squared, gust-aware, and exposure/height dependent', () => {
+  const { model, materials: library } = loadLibraries();
+  const materials = library.materials;
+  const demand = (speedKph, height, exposure = 1.35, kind = 'column', gustFactor = 1) =>
+    model.windMemberDemand({ speedKph, height, exposure, kind, gustFactor });
+  assert.equal(demand(0, 1), 0, 'calm conditions add no wind demand');
+  const halfSpeed = demand(50, 1, 1, 'column', 1);
+  const fullSpeed = demand(100, 1, 1, 'column', 1);
+  assert.ok(Math.abs(fullSpeed / halfSpeed - 4) < 1e-9, 'doubling wind speed quadruples the pressure-based demand');
+  assert.ok(demand(100, 1) > demand(100, 0), 'higher members receive greater wind demand');
+  assert.ok(demand(100, 1, 1.35) > demand(100, 1, 0.38), 'windward exposure increases structural demand');
+  assert.ok(demand(100, 1, 1.35, 'beam') > demand(100, 1, 1.35, 'beam', 0.7), 'gust strength affects demand');
+  const severeWindColumn = demand(100, 1, 1.35, 'column', 1.24);
+  assert.ok(severeWindColumn > materials.wood.column.capacity, 'severe wind can overload a weak wood column');
+  assert.ok(severeWindColumn < materials.steel.column.capacity, 'the same wind load alone remains below built-in steel column capacity');
+  assert.ok(Number.isFinite(model.windMemberDemand({ speedKph: 1000, height: 5, exposure: 9, kind: 'unknown' })), 'unexpected inputs remain bounded');
+});

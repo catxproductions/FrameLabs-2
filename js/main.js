@@ -8,21 +8,26 @@ const GRAVITY=9.81,MAX_FALL_SPEED=15,IMPACT_RESTITUTION=.12,IMPACT_TRANSFER_EFFI
 const PHYSICS_MODEL=window.FrameLabPhysicsModel||null;
 const QUALITY_PRESETS={entry:{label:'Entry',pixelRatio:1,maxDebris:90,maxParticles:170,constraintIterations:5,contactShadows:false,atmosphere:false,wetHighlights:false},balanced:{label:'Balanced',pixelRatio:1.5,maxDebris:170,maxParticles:360,constraintIterations:8,contactShadows:true,atmosphere:true,wetHighlights:true},enthusiast:{label:'Enthusiast',pixelRatio:2,maxDebris:280,maxParticles:600,constraintIterations:11,contactShadows:true,atmosphere:true,wetHighlights:true}};
 let MAX_DEBRIS=QUALITY_PRESETS.balanced.maxDebris,MAX_ATMOSPHERIC_PARTICLES=QUALITY_PRESETS.balanced.maxParticles,QUALITY_PROFILE=QUALITY_PRESETS.balanced,qualityMode='auto',showSimulationOverlays=true,gravityTether=null;
-const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1,windTime:0};
+const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1};
 // These settings tune appearance only. Heat, fuel consumption, ignition, and
 // material damage remain governed by the simulation model.
 const EFFECT_SETTINGS={fireRealism:.80,fireDensity:1,fireSize:1,dustRealism:.72,dustDensity:1,dustSize:1,smokeRealism:.78,smokeDensity:1,smokeSize:1};
 function windSpeedRatio(){return clamp((Number(ENVIRONMENT.windSpeed)||0)/100,0,1)}
 function windDirectionSign(){return Number(ENVIRONMENT.windDirection)<0?-1:1}
-function windGustFactor(time=ENVIRONMENT.windTime){return clamp(1+.16*Math.sin((Number(time)||0)*1.13)+.08*Math.sin((Number(time)||0)*.47+1.7),.70,1.24)}
+function windGustFactor(time=sim.time){return clamp(1+.16*Math.sin((Number(time)||0)*1.13)+.08*Math.sin((Number(time)||0)*.47+1.7),.70,1.24)}
 function windLoadForMember(kind,e){
- const pressure=windSpeedRatio()**2;if(pressure<=.0001||!e)return 0;
+ const speedRatio=windSpeedRatio();if(speedRatio<=.0001||!e)return 0;
+ // Wind load is a structural demand, separate from the sway acceleration. It rises
+ // with the square of slider speed, gusts, elevation and windward exposure.
  const edge=(kind==='column'?(e.x===0||e.x===NX):(e.x===0||e.x>=NX-1));
  const windward=windDirectionSign()>0?(e.x===0):(e.x===(kind==='column'?NX:NX-1));
  const exposure=edge?(windward?1.35:.82):.38;
  const height=clamp(((Number(e.y)||0)+(kind==='column'?.5:0))/Math.max(1,NY),0,1);
- const typeFactor={column:1.15,beam:.18,slab:.08,brace:.42}[kind]||.2;
- return pressure*(.4+.6*height)*exposure*typeFactor*2.8;
+ if(PHYSICS_MODEL?.windMemberDemand){
+  return PHYSICS_MODEL.windMemberDemand({speedKph:ENVIRONMENT.windSpeed,gustFactor:windGustFactor(),height,exposure,kind});
+ }
+ const typeFactor={column:1.15,beam:.34,slab:.24,brace:.38}[kind]||.2;
+ return clamp(speedRatio*speedRatio*windGustFactor()*(.35+.85*height)*exposure*typeFactor*6.5,0,32);
 }
 function updateLateralSway(dt){
  const step=clamp(Number(dt)||0,0,.05);if(step<=0)return;
@@ -192,7 +197,7 @@ async function runPrecalculation(){
   setReplayStatus(`Pre-calculating 0.00 / ${(limit*DT).toFixed(2)} seconds…`);
   for(let i=1;i<=limit;i++){
    if(precalcCancelRequested||bakeId!==replayBakeId)break;
-   ENVIRONMENT.windTime+=DT;await stepPhysics(DT);completed=i;
+   await stepPhysics(DT);completed=i;
    if(i%replayConfig.checkpointSteps===0||i===limit||!sim.running){
     const checkpoint=captureReplayState(),bytes=replayStateBytes(checkpoint);
     if(usedBytes+bytes>replayConfig.maxBytes){memoryLimited=true;break}

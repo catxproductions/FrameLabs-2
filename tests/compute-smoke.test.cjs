@@ -509,3 +509,17 @@ test('debris collision hot path is routed to optional C++ WebAssembly with JavaS
   assert.match(cpp, /int resolve_debris_pairs\(/);
   assert.match(main, /finishDebrisCollisionFragments\(fragments\)/);
 });
+
+
+test('wind affects structural demand and uses the sustained-overload failure path', () => {
+  const js = read('js/main.js');
+  const model = read('js/physics-model.js');
+  const html = read('index.html');
+  assert.match(js, /PHYSICS_MODEL\?\.windMemberDemand/);
+  assert.match(js, /col\.windDemand=windLoadForMember\('column',col\);col\.demand\+=col\.windDemand/);
+  assert.match(js, /beam\.windDemand=windDemand;beam\.demand=d/);
+  assert.match(js, /brace\.windDemand=windLoadForMember\('brace',brace\);brace\.demand=.*brace\.windDemand/);
+  assert.match(js, /if\(util>1\)\{sim\.overloadTimers/);
+  assert.match(model, /function windMemberDemand\(/);
+  assert.match(html, /Sustained severe wind can weaken and break vulnerable members/);
+});

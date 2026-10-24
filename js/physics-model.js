@@ -64,6 +64,19 @@
     };
   }
 
+  // Simplified structural wind demand, calibrated in game units (not engineering
+  // pressure units). Wind pressure scales with speed squared; high floors, gusts,
+  // windward edges and weaker material capacities therefore matter to failure.
+  function windMemberDemand({ speedKph = 0, gustFactor = 1, height = 0, exposure = 1, kind = 'column' } = {}) {
+    const speedRatio = clamp(finite(speedKph) / 100, 0, 1);
+    if (speedRatio <= 0.0001) return 0;
+    const gust = clamp(finite(gustFactor, 1), 0.7, 1.24);
+    const elevation = 0.35 + 0.85 * clamp(finite(height), 0, 1);
+    const projectedExposure = clamp(finite(exposure, 1), 0, 1.55);
+    const typeFactor = { column: 1.15, beam: 0.34, slab: 0.24, brace: 0.38 }[kind] || 0.2;
+    return clamp(speedRatio * speedRatio * gust * elevation * projectedExposure * typeFactor * 6.5, 0, 32);
+  }
+
   function chooseQualityTier({ cpuMs = 8, cores = 4, memoryGB = 4, gpuExpected = false, gpuMs = null } = {}) {
     const cpu = Math.max(0, finite(cpuMs, 8));
     const hwCores = Math.max(1, finite(cores, 4));
@@ -87,6 +100,7 @@
     contactResponse,
     submergedFraction,
     environmentAcceleration,
+    windMemberDemand,
     chooseQualityTier,
     shadeForMoisture
   });
