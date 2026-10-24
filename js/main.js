@@ -1654,7 +1654,7 @@ async function resolveDebrisCollisions(dt){
  }
  // Worker transfer overhead only pays off for a substantial collision batch.
  if(wasmPairIndices.length>=32&&window.FrameLabCompute?.resolveDebrisPairs){
-  const stride=17,packed=new Float64Array(live.length*stride),wasSettled=live.map(d=>!!d.settled),materialLibrary=PHYSICS_MODEL?.materials||{};
+  const stride=19,packed=new Float64Array(live.length*stride),wasSettled=live.map(d=>!!d.settled),materialLibrary=PHYSICS_MODEL?.materials||{};
   for(let i=0;i<live.length;i++){
    const d=live[i],m=materialLibrary[d.material]||{},b=i*stride;
    packed[b]=Number(d.x)||0;packed[b+1]=Number(d.y)||0;packed[b+2]=Number(d.vx)||0;packed[b+3]=Number(d.vy)||0;
@@ -1665,6 +1665,7 @@ async function resolveDebrisCollisions(dt){
    packed[b+14]=Number.isFinite(Number(m.dynamicFriction))?Number(m.dynamicFriction):.32;
    packed[b+15]=Number.isFinite(Number(m.restitution))?Number(m.restitution):IMPACT_RESTITUTION;
    packed[b+16]=Number.isFinite(Number(m.wetSensitivity))?Number(m.wetSensitivity):0;
+   packed[b+17]=Math.cos(Number(d.angle)||0);packed[b+18]=Math.sin(Number(d.angle)||0);
   }
   const wasmResult=await window.FrameLabCompute.resolveDebrisPairs(packed,new Uint32Array(wasmPairIndices),ENVIRONMENT.moisture);
   if(sim!==activeSimulation)return;

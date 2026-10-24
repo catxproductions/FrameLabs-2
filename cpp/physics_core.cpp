@@ -111,13 +111,32 @@ __attribute__((visibility("default"))) int integrate_bodies(uint32_t data_ptr, u
 
 // Debris body layout (17 Float64 values):
 // x,y,vx,vy,angle,omega,length,thickness,mass,settled,durability,integrity,
-// fragmentDepth,staticFriction,dynamicFriction,restitution,wetSensitivity.
+// fragmentDepth,staticFriction,dynamicFriction,restitution,wetSensitivity,cos(angle),sin(angle).
 // Each candidate pair is two uint32 indexes. Each event is
 // [collided, normalImpulse, closingSpeed, impactEnergy].
 static inline double debris_radius(const double* d, double ax, double ay) {
-  const double c = __builtin_cos(d[4]), s = __builtin_sin(d[4]);
+  const double c = d[17], s = d[18];
   return __builtin_fabs(c * ax + s * ay) * d[6] * 0.5 +
          __builtin_fabs(-s * ax + c * ay) * d[7] * 0.5;
+}
+static inline double fast_exp_neg(double x) {
+  // Range-reduced exp(-x) polynomial; bounded for all contact speeds and needs no libc libm.
+  if (!(x > 0.0)) return 1.0;
+  if (x > 48.0) return 0.0;
+  const double invLn2 = 1.4426950408889634, ln2 = 0.6931471805599453;
+  const uint32_t n = (uint32_t)(x * invLn2);
+  const double r = x - (double)n * ln2;
+  const double p = 1.0 + r * (-1.0 + r * (0.5 + r * (-0.16666666666666666 +
+      r * (0.041666666666666664 + r * (-0.008333333333333333 +
+      r * (0.001388888888888889 + r * (-0.0001984126984126984 +
+      r * (0.0000248015873015873 + r * (-0.0000027557319223985893 +
+      r * 0.0000002755731922398589)))))))));
+  double scale = 1.0, factor = 0.5;
+  for (uint32_t bits = n; bits; bits >>= 1U) {
+    if (bits & 1U) scale *= factor;
+    factor *= factor;
+  }
+  return p * scale;
 }
 static inline double debris_inverse_mass(const double* d) {
   const double mass = d[8] > 0.025 ? d[8] : 0.025;
@@ -135,7 +154,7 @@ static inline void debris_point_velocity(const double* d, double rx, double ry, 
 __attribute__((visibility("default"))) int resolve_debris_pairs(
     uint32_t bodies_ptr, uint32_t pairs_ptr, uint32_t events_ptr,
     uint32_t body_count, uint32_t pair_count, double moisture) {
-  const uint32_t BODY_STRIDE = 17U, EVENT_STRIDE = 4U;
+  const uint32_t BODY_STRIDE = 19U, EVENT_STRIDE = 4U;
   if (!bodies_ptr || (pair_count && (!pairs_ptr || !events_ptr)) ||
       body_count > 1000000U || pair_count > 4000000U) return -1;
   double* bodies = (double*)(uintptr_t)bodies_ptr;
@@ -152,8 +171,8 @@ __attribute__((visibility("default"))) int resolve_debris_pairs(
     double* b = bodies + ib * BODY_STRIDE;
     if (a[9] != 0.0 && b[9] != 0.0) continue;
 
-    const double ca = __builtin_cos(a[4]), sa = __builtin_sin(a[4]);
-    const double cb = __builtin_cos(b[4]), sb = __builtin_sin(b[4]);
+    const double ca = a[17], sa = a[18];
+    const double cb = b[17], sb = b[18];
     const double hax = (__builtin_fabs(ca) * a[6] + __builtin_fabs(sa) * a[7]) * 0.5;
     const double hay = (__builtin_fabs(sa) * a[6] + __builtin_fabs(ca) * a[7]) * 0.5;
     const double hbx = (__builtin_fabs(cb) * b[6] + __builtin_fabs(sb) * b[7]) * 0.5;
@@ -210,10 +229,10 @@ __attribute__((visibility("default"))) int resolve_debris_pairs(
       const double dryDynamic = (a[14] + b[14]) * 0.5;
       const double wetSensitivity = (a[16] + b[16]) * 0.5;
       const double wetFactor = 1.0 - wet * wetSensitivity * 0.56;
-      const double speedCurve = __builtin_exp(-1.35 * speed);
+      const double speedCurve = fast_exp_neg(1.35 * speed);
       const double dynamicFriction = clampd((dryDynamic + (dryStatic - dryDynamic) * speedCurve) * wetFactor, 0.035, 1.15);
       const double restitution = clampd(((a[15] + b[15]) * 0.5) *
-          __builtin_exp(-0.045 * speed) * (1.0 - 0.25 * wet), 0.02, 0.30);
+          fast_exp_neg(0.045 * speed) * (1.0 - 0.25 * wet), 0.02, 0.30);
       const double iaMoment = debris_inertia(a), ibMoment = debris_inertia(b);
       const double caTerm = rAx * ny - rAy * nx, cbTerm = rBx * ny - rBy * nx;
       const double denom = imA + imB + caTerm * caTerm / iaMoment + cbTerm * cbTerm / ibMoment;

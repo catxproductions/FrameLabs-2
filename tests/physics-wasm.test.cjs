@@ -135,9 +135,9 @@ test('C++ body integration matches Float32 JavaScript integration', async () => 
 test('C++ debris collision solver separates overlapping bodies and reports impact energy', async () => {
   const api = await loadKernel();
   assert.equal(typeof api.resolve_debris_pairs, 'function');
-  const stride = 17;
-  const a = [0, 0, 1, 0, 0, 0, 2, 1, 1, 0, 10, 1, 0, 0.6, 0.35, 0.12, 0.2];
-  const b = [1.5, 0, -1, 0, 0, 0, 2, 1, 1, 0, 10, 1, 0, 0.7, 0.30, 0.16, 0.15];
+  const stride = 19;
+  const a = [0, 0, 1, 0, 0, 0, 2, 1, 1, 0, 10, 1, 0, 0.6, 0.35, 0.12, 0.2, 1, 0];
+  const b = [1.5, 0, -1, 0, 0, 0, 2, 1, 1, 0, 10, 1, 0, 0.7, 0.30, 0.16, 0.15, 1, 0];
   const bodies = new Float64Array([...a, ...b]);
   assert.equal(bodies.length, stride * 2);
   const pairs = new Uint32Array([0, 1]);

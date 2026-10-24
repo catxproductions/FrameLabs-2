@@ -109,7 +109,7 @@ function runWasmConstraints(api, nodes, edges, iterations) {
 
 
 function runWasmDebrisPairs(api, bodyBuffer, pairBuffer, moisture) {
-  const stride = 17;
+  const stride = 19;
   if (!api || !(bodyBuffer instanceof ArrayBuffer) || !(pairBuffer instanceof ArrayBuffer) ||
       bodyBuffer.byteLength % (stride * Float64Array.BYTES_PER_ELEMENT) !== 0 ||
       pairBuffer.byteLength % (2 * Uint32Array.BYTES_PER_ELEMENT) !== 0) return null;
