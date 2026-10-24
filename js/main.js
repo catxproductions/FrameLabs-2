@@ -12,6 +12,19 @@ const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1};
 // These settings tune appearance only. Heat, fuel consumption, ignition, and
 // material damage remain governed by the simulation model.
 const EFFECT_SETTINGS={fireRealism:.80,fireDensity:1,fireSize:1,dustRealism:.72,dustDensity:1,dustSize:1,smokeRealism:.78,smokeDensity:1,smokeSize:1};
+// Reuse packing storage across the fixed 120 Hz loop to reduce short-lived typed-array
+// allocations and garbage-collection pauses during large collapses. Buffers may be
+// transferred to/from the worker; acquireScratchArray always recovers from detachment.
+const PHYSICS_SCRATCH_BUFFERS=Object.create(null);
+function acquireScratchArray(key,Type,length){
+ const bytes=length*Type.BYTES_PER_ELEMENT;let buffer=PHYSICS_SCRATCH_BUFFERS[key];
+ if(!buffer||buffer.byteLength<bytes){let capacity=Math.max(1024,buffer?.byteLength||0);while(capacity<bytes)capacity*=2;buffer=new ArrayBuffer(capacity);PHYSICS_SCRATCH_BUFFERS[key]=buffer}
+ return new Type(buffer,0,length);
+}
+function retainScratchBuffer(key,input,output){
+ const buffer=input?.buffer?.byteLength?input.buffer:output?.buffer?.byteLength?output.buffer:null;
+ if(buffer)PHYSICS_SCRATCH_BUFFERS[key]=buffer;
+}
 function windSpeedRatio(){return clamp((Number(ENVIRONMENT.windSpeed)||0)/100,0,1)}
 function windDirectionSign(){return Number(ENVIRONMENT.windDirection)<0?-1:1}
 function windGustFactor(time=sim.time){return clamp(1+.16*Math.sin((Number(time)||0)*1.13)+.08*Math.sin((Number(time)||0)*.47+1.7),.70,1.24)}
@@ -1448,31 +1461,58 @@ async function projectMemberConstraints(){
   return;
  }
  const nodes=Object.values(sim.nodes),indices=new Map(nodes.map((node,index)=>[node.key,index]));
- const state=new Float64Array(nodes.length*5);
+ const state=acquireScratchArray('constraintNodes',Float64Array,nodes.length*5);
  for(let i=0;i<nodes.length;i++){
   const node=nodes[i],base=i*5;
   state[base]=node.position.x;state[base+1]=node.position.y;state[base+2]=node.velocity.x;state[base+3]=node.velocity.y;
   state[base+4]=node.referenceLevel===0?0:1/Math.max(.08,node.mass);
  }
- const edgeRows=[];
+ const edgeScratch=acquireScratchArray('constraintEdges',Float64Array,sim.memberLinks.length*4);let edgeCount=0;
  for(const link of sim.memberLinks){
   if(!linkTransfersSupport(link))continue;
   const aIndex=indices.get(link.nodeA),bIndex=indices.get(link.nodeB);if(aIndex==null||bIndex==null)continue;
   const jointStiffness=Math.min(link.connectionA.stiffnessFactor||1,link.connectionB.stiffnessFactor||1);
   const holding=(link.connectionA.pendingBreakUntil!=null&&sim.time<link.connectionA.pendingBreakUntil)||(link.connectionB.pendingBreakUntil!=null&&sim.time<link.connectionB.pendingBreakUntil);
   const constraintGain=holding?Math.max(.48,jointStiffness):jointStiffness;
-  edgeRows.push(aIndex,bIndex,link.restLength,constraintGain);
+  edgeScratch[edgeCount++]=aIndex;edgeScratch[edgeCount++]=bIndex;edgeScratch[edgeCount++]=link.restLength;edgeScratch[edgeCount++]=constraintGain;
  }
- if(!edgeRows.length)return;
- const solved=await window.FrameLabCompute.projectConstraints(state,new Float64Array(edgeRows),QUALITY_PROFILE.constraintIterations);
+ if(!edgeCount)return;
+ const edges=edgeScratch.subarray(0,edgeCount);
+ const solved=await window.FrameLabCompute.projectConstraints(state,edges,QUALITY_PROFILE.constraintIterations);
  if(sim!==activeSimulation)return;
  for(let i=0;i<nodes.length;i++){
   const node=nodes[i],base=i*5;node.position.x=solved[base];node.position.y=solved[base+1];node.velocity.x=solved[base+2];node.velocity.y=solved[base+3];
  }
 }
-async function integrateMotionBatch(packed,dt){
+function packMotionNodes(motionNodes,stride=13,packed=new Float32Array(motionNodes.length*stride)){
+ for(let i=0;i<motionNodes.length;i++){
+  const m=motionNodes[i],n=m.node,b=i*stride;
+  packed[b]=n.position.x;packed[b+1]=n.position.y;packed[b+2]=n.velocity.x;packed[b+3]=n.velocity.y;
+  packed[b+4]=m.ax;packed[b+5]=m.ay;packed[b+6]=0;packed[b+7]=0;packed[b+8]=m.alpha;packed[b+9]=m.damping;
+  packed[b+10]=m.maxVX;packed[b+11]=m.maxVY;packed[b+12]=m.maxOmega;
+ }
+ return packed;
+}
+function packMotionBodies(motionBodies,stride=13,packed=new Float32Array(motionBodies.length*stride)){
+ for(let i=0;i<motionBodies.length;i++){
+  const m=motionBodies[i],d=m.d,b=i*stride;
+  packed[b]=d.x;packed[b+1]=d.y;packed[b+2]=d.vx;packed[b+3]=d.vy;packed[b+4]=m.ax;packed[b+5]=m.ay;
+  packed[b+6]=d.angle;packed[b+7]=d.angularVelocity;packed[b+8]=m.angularAcceleration;packed[b+9]=m.angularDamping;
+  packed[b+10]=MAX_FALL_SPEED;packed[b+11]=MAX_FALL_SPEED;packed[b+12]=3.4;
+ }
+ return packed;
+}
+async function integrateMotionBatch(packed,dt,scratchKey='nodeMotionPacked',rebuildFallback=null){
  if(window.FrameLabCompute?.integrateBodies){
-  const result=await window.FrameLabCompute.integrateBodies(packed,dt);
+  let activePacked=packed,result=await window.FrameLabCompute.integrateBodies(packed,dt,{transferOwnership:true});
+  if(!result?.data){
+   // If a worker crashed after transfer, rebuild from authoritative objects and let
+   // the backend retry with its main-thread CPU fallback rather than losing a step.
+   activePacked=packed.buffer.byteLength?packed:(typeof rebuildFallback==='function'?rebuildFallback():null);
+   if(!activePacked)throw new Error('Physics worker failed and no recovery state was available.');
+   result=await window.FrameLabCompute.integrateBodies(activePacked,dt);
+  }
+  retainScratchBuffer(scratchKey,activePacked,result.data);
   return result.data;
  }
  // Defensive fallback for a page loaded without the optional compute-backends script.
@@ -1483,6 +1523,7 @@ async function integrateMotionBatch(packed,dt){
   const omega=clamp(packed[b+7]+packed[b+8]*step,-maxOmega,maxOmega)*clamp(packed[b+9],0,1);
   packed[b+2]=vx;packed[b+3]=vy;packed[b]+=vx*step;packed[b+1]+=vy*step;packed[b+7]=omega;packed[b+6]+=omega*step;
  }
+ retainScratchBuffer(scratchKey,packed,packed);
  return packed;
 }
 
@@ -1518,14 +1559,9 @@ async function updateMemberPhysics(dt){
   motionNodes.push({node,pinned:false,ax:node.acceleration.x,ay:node.acceleration.y,alpha:0,damping:1,maxVX:5,maxVY:MAX_FALL_SPEED,maxOmega:3.4});
  }
  if(motionNodes.length){
-  const stride=window.FrameLabCompute?.bodyStride||13,packed=new Float32Array(motionNodes.length*stride);
-  for(let i=0;i<motionNodes.length;i++){
-   const m=motionNodes[i],n=m.node,b=i*stride;
-   packed[b]=n.position.x;packed[b+1]=n.position.y;packed[b+2]=n.velocity.x;packed[b+3]=n.velocity.y;
-   packed[b+4]=m.ax;packed[b+5]=m.ay;packed[b+6]=0;packed[b+7]=0;packed[b+8]=m.alpha;packed[b+9]=m.damping;
-   packed[b+10]=m.maxVX;packed[b+11]=m.maxVY;packed[b+12]=m.maxOmega;
-  }
-  const result=await integrateMotionBatch(packed,dt);
+  const stride=window.FrameLabCompute?.bodyStride||13;
+  const packed=packMotionNodes(motionNodes,stride,acquireScratchArray('nodeMotionPacked',motionNodes.length*stride));
+  const result=await integrateMotionBatch(packed,dt,'nodeMotionPacked',()=>packMotionNodes(motionNodes,stride));
   if(sim!==activeSimulation)return;
   for(let i=0;i<motionNodes.length;i++){
    const m=motionNodes[i],n=m.node,b=i*stride;
@@ -1570,14 +1606,9 @@ async function updateDebris(dt){
   motionBodies.push({d,ax,ay,angularAcceleration,angularDamping});
  }
  if(motionBodies.length){
-  const stride=window.FrameLabCompute?.bodyStride||13,packed=new Float32Array(motionBodies.length*stride);
-  for(let i=0;i<motionBodies.length;i++){
-   const m=motionBodies[i],d=m.d,b=i*stride;
-   packed[b]=d.x;packed[b+1]=d.y;packed[b+2]=d.vx;packed[b+3]=d.vy;packed[b+4]=m.ax;packed[b+5]=m.ay;
-   packed[b+6]=d.angle;packed[b+7]=d.angularVelocity;packed[b+8]=m.angularAcceleration;packed[b+9]=m.angularDamping;
-   packed[b+10]=MAX_FALL_SPEED;packed[b+11]=MAX_FALL_SPEED;packed[b+12]=3.4;
-  }
-  const result=await integrateMotionBatch(packed,dt);
+  const stride=window.FrameLabCompute?.bodyStride||13;
+  const packed=packMotionBodies(motionBodies,stride,acquireScratchArray('debrisMotionPacked',motionBodies.length*stride));
+  const result=await integrateMotionBatch(packed,dt,'debrisMotionPacked',()=>packMotionBodies(motionBodies,stride));
   if(sim!==activeSimulation)return;
   for(let i=0;i<motionBodies.length;i++){
    const d=motionBodies[i].d,b=i*stride;d.x=result[b];d.y=result[b+1];d.vx=result[b+2];d.vy=result[b+3];d.angle=result[b+6];d.angularVelocity=result[b+7];
@@ -2029,7 +2060,7 @@ async function runPerformanceBenchmark(){
  draw();
 }
 let physicsAccumulator=0,physicsStepBusy=false;
-const MAX_PHYSICS_STEPS_PER_FRAME=8;
+const MAX_PHYSICS_STEPS_PER_FRAME=4;
 async function processPhysicsSteps(){
  if(precalcActive||physicsStepBusy)return;
  physicsStepBusy=true;let steps=0;
@@ -2045,7 +2076,8 @@ async function processPhysicsSteps(){
   if(!sim.running)physicsAccumulator=0;
   physicsStepBusy=false;
   if(steps>0){if((frame++%4)===0)updateMetrics();draw()}
-  if(sim.running&&physicsAccumulator+1e-9>=DT)void processPhysicsSteps();
+  // If physics falls behind, the next animation frame services the bounded backlog.
+  // Avoid immediately recursing through several batches before the browser can paint.
  }
 }
 function animate(now){
