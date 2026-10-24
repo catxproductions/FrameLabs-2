@@ -10,8 +10,10 @@
     : new URL('./js/compute-backends.js', document.baseURI).href;
   const workerURL = new URL('./compute-worker.js', scriptURL);
   const GPU_THRESHOLD = 2048;
-  const GPU_BODY_THRESHOLD = 256;
-  let autoPreferGPU = false; // Conservative until a real body-integration benchmark proves otherwise.
+  const GPU_BENCHMARK_COUNTS = [256, 1024, 4096];
+  let autoPreferGPU = false;
+  let autoGPUThreshold = Infinity;
+  let gpuBodyLimitBytes = Infinity;
   const BODY_STRIDE = 13; // x,y,vx,vy,ax,ay,angle,omega,alpha,angular damping,max vx,max vy,max omega
 
   let worker = null;
@@ -25,11 +27,82 @@
   let gpuInitPromise = null;
   let sequence = 0;
   const pending = new Map();
+  const gpuBuffers = { body: {}, scan: {} };
+  const computeStats = {
+    gpuIntegrationCalls: 0, workerIntegrationCalls: 0, wasmIntegrationCalls: 0,
+    mainThreadIntegrationCalls: 0, workerConstraintCalls: 0, wasmConstraintCalls: 0,
+    wasmDebrisBatches: 0, workerFailures: 0, gpuFallbacks: 0,
+    transferredBytes: 0, lastIntegrationBackend: 'not started'
+  };
+  let runtimeStatusTimer = null;
+  let runtimeStatusPending = '';
 
   const statusEl = () => document.getElementById('computeMetric');
   function setStatus(text) {
+    if (runtimeStatusTimer !== null && typeof window.clearTimeout === 'function') {
+      window.clearTimeout(runtimeStatusTimer);
+    }
+    runtimeStatusTimer = null;
+    runtimeStatusPending = '';
     const el = statusEl();
-    if (el) el.textContent = text;
+    const value = String(text ?? '');
+    if (el && el.textContent !== value) el.textContent = value;
+  }
+  // Hot physics paths update their internal backend state every substep, but
+  // touching the DOM several hundred times per second adds needless main-thread
+  // work. Coalesce status-only UI updates to at most four times per second.
+  function setRuntimeStatus(text) {
+    runtimeStatusPending = String(text ?? '');
+    if (runtimeStatusTimer !== null) return;
+    if (typeof window.setTimeout !== 'function') {
+      setStatus(runtimeStatusPending);
+      return;
+    }
+    runtimeStatusTimer = window.setTimeout(() => {
+      runtimeStatusTimer = null;
+      const value = runtimeStatusPending;
+      runtimeStatusPending = '';
+      const el = statusEl();
+      if (el && value && el.textContent !== value) el.textContent = value;
+    }, 250);
+  }
+  class GPUBufferLimitError extends RangeError {
+    constructor(message) { super(message); this.name = 'GPUBufferLimitError'; }
+  }
+  function destroyBufferPool(pool) {
+    for (const key of Object.keys(pool)) {
+      if (key.endsWith('Capacity')) continue;
+      try { pool[key]?.destroy?.(); } catch (_) {}
+      pool[key] = null;
+    }
+    for (const key of Object.keys(pool)) if (key.endsWith('Capacity')) pool[key] = 0;
+  }
+  function clearGPUBufferPools() {
+    destroyBufferPool(gpuBuffers.body);
+    destroyBufferPool(gpuBuffers.scan);
+  }
+  function ensureGPUBuffer(device, pool, key, requiredSize, usage, maxSize = Infinity) {
+    if (!Number.isSafeInteger(requiredSize) || requiredSize <= 0) {
+      throw new RangeError('GPU buffer size must be a positive integer.');
+    }
+    const hardLimit = Math.min(
+      Number(device.limits?.maxBufferSize) || Infinity,
+      Number(maxSize) || Infinity
+    );
+    if (requiredSize > hardLimit) {
+      throw new GPUBufferLimitError(`Requested GPU buffer (${requiredSize} bytes) exceeds this adapter's limit (${hardLimit} bytes).`);
+    }
+    const capacityKey = `${key}Capacity`;
+    if (pool[key] && (pool[capacityKey] || 0) >= requiredSize) return pool[key];
+    try { pool[key]?.destroy?.(); } catch (_) {}
+    let capacity = Math.max(256, 2 ** Math.ceil(Math.log2(requiredSize)));
+    if (capacity > hardLimit) capacity = requiredSize;
+    if (capacity % 4) capacity = Math.ceil(capacity / 4) * 4;
+    if (capacity > hardLimit) capacity = requiredSize;
+    const buffer = device.createBuffer({ size: capacity, usage });
+    pool[key] = buffer;
+    pool[capacityKey] = capacity;
+    return buffer;
   }
   function finiteNonNegative(value) {
     const n = Number(value);
@@ -176,6 +249,9 @@
         gpuPipeline = null;
         gpuIntegratePipeline = null;
         gpuInitPromise = null;
+        autoPreferGPU = false;
+        autoGPUThreshold = Infinity;
+        clearGPUBufferPools();
         gpuState = `lost${info && info.message ? `: ${info.message}` : ''}`;
         backend = worker ? 'Web Worker (CPU)' : 'Main-thread fallback';
         setStatus(`${backend} · GPU unavailable`);
@@ -186,6 +262,9 @@
       gpuPipeline = null;
       gpuIntegratePipeline = null;
       gpuInitPromise = null;
+      autoPreferGPU = false;
+      autoGPUThreshold = Infinity;
+      clearGPUBufferPools();
       throw error;
     });
     return gpuInitPromise;
@@ -193,8 +272,7 @@
 
   async function scanGPU(demands, capacities) {
     await initGPU();
-    const device = gpuDevice;
-    const pipeline = gpuPipeline;
+    const device = gpuDevice, pipeline = gpuPipeline;
     if (!device || !pipeline) throw new Error('GPU not ready');
     const count = demands.length;
     if (count === 0) return { backend: 'WebGPU compute', count: 0, maxUtil: 0, meanUtil: 0, overloaded: 0 };
@@ -205,21 +283,27 @@
       packed[i * 2 + 1] = Math.max(0.01, finiteNonNegative(capacities[i]));
     }
 
-    let input, output, readback, uniform, mapped = false;
+    const inputBytes = packed.byteLength;
+    const outputSize = count * Float32Array.BYTES_PER_ELEMENT;
+    let mapped = false;
+    const input = ensureGPUBuffer(device, gpuBuffers.scan, 'input', inputBytes,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, device.limits.maxStorageBufferBindingSize);
+    const output = ensureGPUBuffer(device, gpuBuffers.scan, 'output', outputSize,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, device.limits.maxStorageBufferBindingSize);
+    const readback = ensureGPUBuffer(device, gpuBuffers.scan, 'readback', outputSize,
+      GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+    const uniform = ensureGPUBuffer(device, gpuBuffers.scan, 'uniform', 4,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
     try {
-      input = device.createBuffer({ size: packed.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-      const outputSize = count * Float32Array.BYTES_PER_ELEMENT;
-      output = device.createBuffer({ size: outputSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-      readback = device.createBuffer({ size: outputSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-      uniform = device.createBuffer({ size: 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       device.queue.writeBuffer(input, 0, packed);
       device.queue.writeBuffer(uniform, 0, new Uint32Array([count]));
       const bindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: input } },
-          { binding: 1, resource: { buffer: output } },
-          { binding: 2, resource: { buffer: uniform } }
+          { binding: 0, resource: { buffer: input, size: inputBytes } },
+          { binding: 1, resource: { buffer: output, size: outputSize } },
+          { binding: 2, resource: { buffer: uniform, size: 4 } }
         ]
       });
       const encoder = device.createCommandEncoder();
@@ -230,17 +314,16 @@
       pass.end();
       encoder.copyBufferToBuffer(output, 0, readback, 0, outputSize);
       device.queue.submit([encoder.finish()]);
-      await readback.mapAsync(GPUMapMode.READ);
+      await readback.mapAsync(GPUMapMode.READ, 0, outputSize);
       mapped = true;
-      const ratios = new Float32Array(readback.getMappedRange().slice(0));
+      const ratios = new Float32Array(readback.getMappedRange(0, outputSize).slice(0));
       return summarizeRatios(ratios, 'WebGPU compute', count);
     } finally {
-      if (mapped && readback) {
+      if (mapped) {
         try { readback.unmap(); } catch (_) {}
       }
-      for (const buffer of [input, output, readback, uniform]) {
-        try { buffer?.destroy(); } catch (_) {}
-      }
+      // Keep GPU buffers around between scans; destroy/replace only on growth,
+      // device loss, or a genuine backend failure.
     }
   }
 
@@ -273,31 +356,43 @@
     const count = packed.length / BODY_STRIDE;
     if (!count) return packed;
     const bytes = packed.byteLength;
-    if (bytes > device.limits.maxStorageBufferBindingSize || bytes > device.limits.maxBufferSize) {
-      throw new Error("Physics batch exceeds this GPU adapter's storage-buffer limit");
+    const maxStateBytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
+    if (bytes > maxStateBytes) {
+      throw new GPUBufferLimitError("Physics batch exceeds this GPU adapter's storage-buffer limit");
     }
-    let state, uniform, readback, mapped = false;
+    let mapped = false;
+    // Reuse storage/uniform/readback buffers across fixed 120 Hz steps. Creating
+    // and destroying three GPU buffers every call was needless allocator churn.
+    const state = ensureGPUBuffer(device, gpuBuffers.body, 'state', bytes,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, maxStateBytes);
+    const uniform = ensureGPUBuffer(device, gpuBuffers.body, 'uniform', 16,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const readback = ensureGPUBuffer(device, gpuBuffers.body, 'readback', bytes,
+      GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
     try {
-      state = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
-      uniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-      readback = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       device.queue.writeBuffer(state, 0, packed);
       const params = new ArrayBuffer(16), view = new DataView(params);
-      view.setUint32(0, count, true); view.setFloat32(4, Math.max(0, Math.min(0.05, Number(dt) || 0)), true);
+      view.setUint32(0, count, true);
+      view.setFloat32(4, Math.max(0, Math.min(0.05, Number(dt) || 0)), true);
       device.queue.writeBuffer(uniform, 0, params);
       const bindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: state } }, { binding: 1, resource: { buffer: uniform } }]
+        entries: [
+          { binding: 0, resource: { buffer: state, size: bytes } },
+          { binding: 1, resource: { buffer: uniform, size: 16 } }
+        ]
       });
       const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-      pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(Math.ceil(count / 64)); pass.end();
+      pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(Math.ceil(count / 64)); pass.end();
       encoder.copyBufferToBuffer(state, 0, readback, 0, bytes);
       device.queue.submit([encoder.finish()]);
-      await readback.mapAsync(GPUMapMode.READ); mapped = true;
-      return new Float32Array(readback.getMappedRange().slice(0));
+      await readback.mapAsync(GPUMapMode.READ, 0, bytes);
+      mapped = true;
+      return new Float32Array(readback.getMappedRange(0, bytes).slice(0));
     } finally {
-      if (mapped && readback) { try { readback.unmap(); } catch (_) {} }
-      for (const buffer of [state, uniform, readback]) { try { buffer?.destroy(); } catch (_) {} }
+      if (mapped) { try { readback.unmap(); } catch (_) {} }
+      // Buffers are intentionally retained for the next physics substep.
     }
   }
 
