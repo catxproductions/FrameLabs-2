@@ -5,7 +5,8 @@
   "description": "FrameLab with CPU-worker/WebGPU live body integration and structural compute diagnostics.",
   "scripts": {
     "test": "node --test tests/*.test.cjs",
-    "check": "node --check js/main.js && node --check js/replay-tools.js && node --check js/compute-backends.js && node --check js/compute-worker.js && node --check js/materials.js && node --check js/physics-model.js && npm test"
+    "check": "npm run build:wasm && node --check js/main.js && node --check js/replay-tools.js && node --check js/compute-backends.js && node --check js/compute-worker.js && node --check js/materials.js && node --check js/physics-model.js && npm test",
+    "build:wasm": "sh scripts/build-physics-wasm.sh"
   },
   "engines": {
     "node": ">=18"
