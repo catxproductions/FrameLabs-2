@@ -72,3 +72,8 @@ npm run check
 ```
 
 GitHub Actions builds and commits the compiled `js/physics-core.wasm` asset to the branch after the regression suite passes. Browser performance still needs to be benchmarked before increasing solver iterations or making C++ the only backend; WebAssembly does not guarantee a speedup for every structure size.
+
+
+### Before increasing solver quality
+
+Profile the same saved design in small, medium, and large structures with the JavaScript fallback and the WebAssembly kernel. Compare frame time and maximum link stretch, and check that collapse motion still looks plausible. No browser-performance gain is claimed until this is measured on real devices.
