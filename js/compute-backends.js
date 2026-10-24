@@ -151,6 +151,7 @@
   }
   function disableWorker(reason) {
     if (worker) {
+      computeStats.workerFailures++;
       worker.onmessage = null;
       worker.onerror = null;
       worker.onmessageerror = null;
@@ -440,11 +441,19 @@
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve: (message) => {
         if (!message || !(message.data instanceof ArrayBuffer)) { reject(new Error('CPU worker returned an invalid constraint result')); return; }
-        resolve({ data: new Float64Array(message.data), backend: message.backend || 'CPU worker constraints' });
+        const result = new Float64Array(message.data, 0,
+          Number.isInteger(message.length) ? message.length : message.data.byteLength / Float64Array.BYTES_PER_ELEMENT);
+        computeStats.workerConstraintCalls++;
+        if (String(message.backend || '').includes('C++ WebAssembly')) computeStats.wasmConstraintCalls++;
+        resolve({ data: result, backend: message.backend || 'CPU worker constraints' });
       }, reject });
       try {
         const nodeCopy = new Float64Array(nodes), edgeCopy = new Float64Array(edges);
-        worker.postMessage({ id, type: 'projectConstraints', nodes: nodeCopy.buffer, edges: edgeCopy.buffer, iterations }, [nodeCopy.buffer, edgeCopy.buffer]);
+        computeStats.transferredBytes += nodeCopy.byteLength + edgeCopy.byteLength;
+        worker.postMessage({
+          id, type: 'projectConstraints', nodes: nodeCopy.buffer, edges: edgeCopy.buffer,
+          nodeLength: nodeCopy.length, edgeLength: edgeCopy.length, iterations
+        }, [nodeCopy.buffer, edgeCopy.buffer]);
       } catch (error) { pending.delete(id); reject(error); }
     }).catch((error) => {
       if (worker) disableWorker(error);
@@ -468,21 +477,26 @@
             resolve(null);
             return;
           }
-          const resultBodies = new Float64Array(message.bodies);
-          const events = new Float64Array(message.events);
+          const resultBodies = new Float64Array(message.bodies,
+            0, Number.isInteger(message.bodyLength) ? message.bodyLength : message.bodies.byteLength / Float64Array.BYTES_PER_ELEMENT);
+          const events = new Float64Array(message.events,
+            0, Number.isInteger(message.eventLength) ? message.eventLength : message.events.byteLength / Float64Array.BYTES_PER_ELEMENT);
           if (resultBodies.length !== bodies.length || events.length !== pairs.length * 2) {
             resolve(null);
             return;
           }
           physicsBackend = message.backend;
           backend = message.backend;
-          setStatus(message.backend + ' · ' + (pairs.length / 2) + ' debris pairs');
+          computeStats.wasmDebrisBatches++;
+          computeStats.transferredBytes += message.bodies.byteLength + message.events.byteLength;
+          setRuntimeStatus(message.backend + ' · ' + (pairs.length / 2) + ' debris pairs');
           resolve({ backend: message.backend, bodies: resultBodies, events });
         },
         reject
       });
       try {
         const bodyCopy = new Float64Array(bodies), pairCopy = new Uint32Array(pairs);
+        computeStats.transferredBytes += bodyCopy.byteLength + pairCopy.byteLength;
         worker.postMessage({
           id, type: 'resolveDebrisPairs', bodies: bodyCopy.buffer,
           pairs: pairCopy.buffer, moisture: Number(moisture) || 0
@@ -515,64 +529,109 @@
     else if (workerResult.backend.includes('C++ WebAssembly')) physicsBackend = 'C++ WebAssembly integration + constraints (CPU worker)';
     else physicsBackend = 'CPU worker integration + CPU constraints';
     backend = physicsBackend;
-    setStatus(physicsBackend);
+    setRuntimeStatus(physicsBackend);
     return workerResult.data;
   }
 
-  function integrateWorker(packed, dt) {
-    if (!worker) return Promise.resolve({ data: integrateCPU(packed, dt), backend: 'Main-thread CPU fallback' });
+  function integrateWorker(packed, dt, transferOwnership = false) {
+    if (!worker) {
+      computeStats.mainThreadIntegrationCalls++;
+      return Promise.resolve({ data: integrateCPU(packed, dt), backend: 'Main-thread CPU fallback' });
+    }
     const id = ++sequence;
+    const canTransfer = transferOwnership && packed.byteOffset === 0;
+    const payload = canTransfer ? packed : new Float32Array(packed);
+    const activeLength = payload.length;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve: (data) => {
-        if (!data || !(data.data instanceof ArrayBuffer || ArrayBuffer.isView(data.data))) {
+      pending.set(id, { resolve: (message) => {
+        if (!message || !(message.data instanceof ArrayBuffer || ArrayBuffer.isView(message.data))) {
           reject(new Error('CPU worker returned an invalid physics result')); return;
         }
-        resolve({
-          data: data.data instanceof ArrayBuffer ? new Float32Array(data.data) : new Float32Array(data.data),
-          backend: data.backend || 'CPU worker physics'
-        });
+        let data;
+        if (message.data instanceof ArrayBuffer) {
+          const length = Number.isInteger(message.length) ? message.length : message.data.byteLength / Float32Array.BYTES_PER_ELEMENT;
+          if (length < 0 || length > message.data.byteLength / Float32Array.BYTES_PER_ELEMENT || length % BODY_STRIDE !== 0) {
+            reject(new Error('CPU worker returned an invalid active body length')); return;
+          }
+          data = new Float32Array(message.data, 0, length);
+          computeStats.transferredBytes += message.data.byteLength;
+        } else {
+          data = new Float32Array(message.data);
+        }
+        if (data.length !== activeLength) {
+          reject(new Error('CPU worker returned an unexpected body count')); return;
+        }
+        computeStats.workerIntegrationCalls++;
+        if (String(message.backend || '').includes('C++ WebAssembly')) computeStats.wasmIntegrationCalls++;
+        computeStats.lastIntegrationBackend = message.backend || 'CPU worker physics';
+        resolve({ data, backend: message.backend || 'CPU worker physics' });
       }, reject });
       try {
-        const payload = new Float32Array(packed);
-        worker.postMessage({ id, type: 'integrateBodies', dt, data: payload.buffer }, [payload.buffer]);
+        if (canTransfer) computeStats.transferredBytes += payload.buffer.byteLength;
+        worker.postMessage({
+          id, type: 'integrateBodies', dt, length: activeLength, data: payload.buffer
+        }, [payload.buffer]);
       } catch (error) { pending.delete(id); reject(error); }
     }).catch((error) => {
       if (worker) disableWorker(error);
+      // A transferred buffer is no longer readable after a worker crash. The caller
+      // can repack state from its authoritative objects and ask the CPU fallback to retry.
+      if (canTransfer) return { data: null, backend: 'CPU worker lost; repack required' };
+      computeStats.mainThreadIntegrationCalls++;
+      computeStats.lastIntegrationBackend = 'Main-thread CPU fallback';
       return { data: integrateCPU(new Float32Array(packed), dt), backend: 'Main-thread CPU fallback' };
     });
   }
 
-  async function integrateBodies(packed, dt) {
+  async function integrateBodies(packed, dt, options = {}) {
     if (!(packed instanceof Float32Array) || packed.length % BODY_STRIDE !== 0) {
       throw new TypeError(`Physics integration requires a Float32Array with ${BODY_STRIDE} values per body.`);
     }
     if (!Number.isFinite(Number(dt)) || dt < 0 || dt > 0.05) throw new RangeError('Physics dt must be between 0 and 0.05 seconds.');
     if (packed.length === 0) return { data: packed, backend: 'No dynamic bodies' };
     for (let i = 0; i < packed.length; i++) if (!Number.isFinite(packed[i])) packed[i] = 0;
-    const useGPU = physicsMode === 'gpu' || (physicsMode === 'auto' && autoPreferGPU && packed.length / BODY_STRIDE >= GPU_BODY_THRESHOLD && navigator.gpu && gpuState !== 'unavailable');
+    const transferOwnership = options && options.transferOwnership === true;
+    const count = packed.length / BODY_STRIDE;
+    const useGPU = physicsMode === 'gpu' ||
+      (physicsMode === 'auto' && autoPreferGPU && count >= autoGPUThreshold &&
+       packed.byteLength <= gpuBodyLimitBytes && navigator.gpu && gpuState !== 'unavailable');
     if (useGPU && navigator.gpu && gpuState !== 'unavailable') {
       try {
         const result = await integrateGPU(packed, dt);
+        computeStats.gpuIntegrationCalls++;
+        computeStats.lastIntegrationBackend = 'WebGPU physics';
         physicsBackend = 'WebGPU physics';
         backend = physicsBackend;
-        setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
+        setRuntimeStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
         return { data: result, backend: physicsBackend };
       } catch (error) {
-        gpuState = 'unavailable'; gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
-        if (physicsMode === 'gpu') setStatus(`WebGPU failed; using CPU · ${error?.message || 'GPU error'}`);
+        computeStats.gpuFallbacks++;
+        if (error instanceof GPUBufferLimitError) {
+          gpuBodyLimitBytes = Math.min(gpuBodyLimitBytes, Math.max(0, packed.byteLength - 4));
+          setRuntimeStatus('WebGPU batch exceeds adapter limit; using CPU for this batch');
+        } else {
+          gpuState = 'unavailable'; gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+          autoPreferGPU = false; autoGPUThreshold = Infinity; clearGPUBufferPools();
+          if (physicsMode === 'gpu') setStatus(`WebGPU failed; using CPU · ${error?.message || 'GPU error'}`);
+        }
       }
     }
     if (physicsMode === 'main') {
+      computeStats.mainThreadIntegrationCalls++;
       const result = integrateCPU(new Float32Array(packed), dt);
+      computeStats.lastIntegrationBackend = 'Main-thread CPU';
       physicsBackend = 'Main-thread CPU'; backend = physicsBackend;
-      setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
+      setRuntimeStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
       return { data: result, backend: physicsBackend };
     }
-    const workerResult = await integrateWorker(packed, dt);
+    const workerResult = await integrateWorker(packed, dt, transferOwnership);
+    if (!workerResult.data) {
+      return { data: null, backend: workerResult.backend, retryRequired: true };
+    }
     const result = workerResult.data;
     physicsBackend = workerResult.backend;
     backend = physicsBackend;
-    setStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
+    setRuntimeStatus(`${physicsBackend} · ${result.length / BODY_STRIDE} bodies`);
     return { data: result, backend: physicsBackend };
   }
 
