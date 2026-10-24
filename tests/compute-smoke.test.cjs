@@ -148,7 +148,8 @@ test('simulation uses fixed 120 Hz physics substeps and exposes immersive fullsc
   assert.match(html, /data-mode="tether"/);
   assert.match(js, /DT=1\/120/);
   assert.match(js, /physicsAccumulator/);
-  assert.match(js, /MAX_PHYSICS_STEPS_PER_FRAME=8/);
+  assert.match(js, /MAX_PHYSICS_STEPS_PER_FRAME=4/);
+  assert.match(js, /If physics falls behind, the next animation frame services the bounded backlog/);
   assert.match(js, /function runPerformanceBenchmark\(\)/);
   assert.match(js, /function beginGravityTether\(/);
   assert.match(js, /function drawContactShadows\(/);
@@ -278,7 +279,7 @@ test('live physics backend exposes selectable mode and a working main-CPU integr
 
 test('actual node and debris motion paths use the compute backend, not only the member diagnostic scan', () => {
   const js = read('js/main.js');
-  assert.match(js, /async function integrateMotionBatch\(packed,dt\)/);
+  assert.match(js, /async function integrateMotionBatch\(packed,dt,scratchKey='nodeMotionPacked',rebuildFallback=null\)/);
   assert.match(js, /async function updateMemberPhysics\(dt\)/);
   assert.match(js, /async function updateDebris\(dt\)/);
   assert.match(js, /await integrateMotionBatch\(packed,dt,'nodeMotionPacked'/);
