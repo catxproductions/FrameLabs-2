@@ -183,20 +183,30 @@ function handlePhysicsRequest(payload, api) {
 
   if (payload.type === 'projectConstraints') {
     try {
-      if (!(payload.nodes instanceof ArrayBuffer) || !(payload.edges instanceof ArrayBuffer) ||
-          payload.nodes.byteLength % (5 * Float64Array.BYTES_PER_ELEMENT) !== 0 ||
-          payload.edges.byteLength % (4 * Float64Array.BYTES_PER_ELEMENT) !== 0) {
-        throw new Error('Invalid node/link state sent to CPU constraint worker.');
+      if (!(payload.nodes instanceof ArrayBuffer) || !(payload.edges instanceof ArrayBuffer)) {
+        throw new Error('Invalid node/link buffers sent to CPU constraint worker.');
       }
-      const nodes = new Float64Array(payload.nodes), edges = new Float64Array(payload.edges);
+      const nodeLength = Number.isInteger(payload.nodeLength)
+        ? payload.nodeLength : payload.nodes.byteLength / Float64Array.BYTES_PER_ELEMENT;
+      const edgeLength = Number.isInteger(payload.edgeLength)
+        ? payload.edgeLength : payload.edges.byteLength / Float64Array.BYTES_PER_ELEMENT;
+      if (nodeLength < 0 || nodeLength % 5 !== 0 ||
+          nodeLength > payload.nodes.byteLength / Float64Array.BYTES_PER_ELEMENT ||
+          edgeLength < 0 || edgeLength % 4 !== 0 ||
+          edgeLength > payload.edges.byteLength / Float64Array.BYTES_PER_ELEMENT) {
+        throw new Error('Invalid active node/link state sent to CPU constraint worker.');
+      }
+      const nodes = new Float64Array(payload.nodes, 0, nodeLength);
+      const edges = new Float64Array(payload.edges, 0, edgeLength);
       const iterations = Math.max(1, Math.min(32, Math.trunc(Number(payload.iterations) || 1)));
       const wasmData = runWasmConstraints(api, nodes, edges, iterations);
       const data = wasmData || projectConstraintsJS(nodes, edges, iterations);
       self.postMessage({
         id, type: 'projectConstraints',
         backend: wasmData ? 'C++ WebAssembly · CPU worker constraints' : 'CPU worker constraints',
-        data: data.buffer
-      }, [data.buffer]);
+        data: data.buffer, edges: edges.buffer,
+        nodeLength: data.length, edgeLength: edges.length
+      }, [data.buffer, edges.buffer]);
     } catch (error) {
       self.postMessage({ id, error: error?.message || 'CPU constraint projection failed.' });
     }
