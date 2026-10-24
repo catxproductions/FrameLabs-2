@@ -1703,9 +1703,10 @@ async function resolveDebrisCollisions(dt){
    packed[b+16]=Number.isFinite(Number(m.wetSensitivity))?Number(m.wetSensitivity):0;
    packed[b+17]=Math.cos(Number(d.angle)||0);packed[b+18]=Math.sin(Number(d.angle)||0);
   }
-  const wasmResult=await window.FrameLabCompute.resolveDebrisPairs(packed,new Uint32Array(wasmPairIndices),ENVIRONMENT.moisture);
+  const pairIndices=new Uint32Array(wasmPairIndices),expectedBodyLength=packed.length,expectedPairLength=pairIndices.length;
+  const wasmResult=await window.FrameLabCompute.resolveDebrisPairs(packed,pairIndices,ENVIRONMENT.moisture,{transferOwnership:true});
   if(sim!==activeSimulation)return;
-  if(wasmResult&&wasmResult.backend==='C++ WebAssembly · debris collision solver'&&wasmResult.bodies.length===packed.length&&wasmResult.events.length===wasmPairIndices.length*2){
+  if(wasmResult&&wasmResult.backend==='C++ WebAssembly · debris collision solver'&&wasmResult.bodies.length===expectedBodyLength&&wasmResult.events.length===expectedPairLength*2){
    for(let i=0;i<live.length;i++){
     const d=live[i],b=i*stride;d.x=wasmResult.bodies[b];d.y=wasmResult.bodies[b+1];d.vx=wasmResult.bodies[b+2];d.vy=wasmResult.bodies[b+3];
     d.angle=wasmResult.bodies[b+4];d.angularVelocity=wasmResult.bodies[b+5];d.settled=!!wasmResult.bodies[b+9];
