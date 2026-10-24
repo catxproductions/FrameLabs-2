@@ -550,11 +550,18 @@ test('performance backend pools GPU buffers, benchmarks crossover sizes, and exp
   const main = read('js/main.js');
   assert.match(backend, /const gpuBuffers = \{ body: \{\}, scan: \{\} \}/);
   assert.match(backend, /function ensureGPUBuffer\(/);
+  assert.match(backend, /let gpuBodyQueue = Promise\.resolve\(\)/);
+  assert.match(backend, /let gpuScanQueue = Promise\.resolve\(\)/);
+  assert.match(backend, /async function integrateGPUUnlocked\(/);
+  assert.match(backend, /async function scanGPUUnlocked\(/);
   assert.match(backend, /GPU_BENCHMARK_COUNTS = \[256, 1024, 4096\]/);
   assert.match(backend, /measurements\.slice\(i\)\.every\(sample => sample\.preferGPU\)/);
   assert.match(backend, /getDiagnostics: \(\) => \(\{/);
   assert.match(backend, /setRuntimeStatus\(text\)/);
   assert.match(backend, /options\.transferOwnership === true/);
+  assert.match(backend, /options && options\.transferOwnership === true/);
+  assert.match(main, /resolveDebrisPairs\(packed,pairIndices,ENVIRONMENT\.moisture,\{transferOwnership:true\}\)/);
+  assert.match(main, /pairs\.add\(ia\*live\.length\+ib\)/);
   assert.match(main, /acquireScratchArray\('constraintNodes'/);
   assert.match(main, /acquireScratchArray\('constraintEdges'/);
   assert.match(main, /transferOwnership:true/);
@@ -576,4 +583,52 @@ test('compute diagnostics remain usable without WebGPU or workers', () => {
   assert.equal(diagnostics.autoGPUThreshold, null);
   assert.equal(diagnostics.gpuState, 'not initialized');
   assert.equal(diagnostics.bodyBufferCapacityBytes, 0);
+});
+
+
+test('large debris solver can transfer exact input batches without backend copies', async () => {
+  const source = read('js/compute-backends.js');
+  const status = { textContent: '' };
+  const requests = [];
+  class TransferWorkerMock {
+    constructor(url) { this.url = String(url); }
+    postMessage(message, transfer = []) {
+      requests.push({ message, transfer });
+      if (message.type !== 'resolveDebrisPairs') return;
+      const events = new Float64Array((new Uint32Array(message.pairs).length / 2) * 4);
+      events[0] = 1; events[1] = 0.5; events[2] = 2; events[3] = 1;
+      queueMicrotask(() => this.onmessage?.({ data: {
+        id: message.id, type: message.type,
+        backend: 'C++ WebAssembly · debris collision solver',
+        bodies: message.bodies, events: events.buffer
+      } }));
+    }
+    terminate() {}
+  }
+  const window = { Worker: TransferWorkerMock };
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: (id) => id === 'computeMetric' ? status : null
+  };
+  vm.runInNewContext(source, {
+    window, document, navigator: {}, Worker: TransferWorkerMock,
+    Float32Array, Float64Array, Uint32Array, ArrayBuffer, URL
+  }, { filename: 'compute-backends-debris-transfer.test.js' });
+  window.FrameLabCompute.setMode('cpu');
+  const bodies = new Float64Array(19 * 2);
+  bodies[6] = 2; bodies[7] = 1; bodies[8] = 1; bodies[17] = 1;
+  bodies[19 + 6] = 2; bodies[19 + 7] = 1; bodies[19 + 8] = 1; bodies[19 + 17] = 1;
+  const pairs = new Uint32Array([0, 1]);
+  const bodyBuffer = bodies.buffer, pairBuffer = pairs.buffer;
+  const result = await window.FrameLabCompute.resolveDebrisPairs(bodies, pairs, 0, { transferOwnership: true });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].message.bodies, bodyBuffer, 'the original exact body buffer is sent to the worker');
+  assert.equal(requests[0].message.pairs, pairBuffer, 'the original exact pair buffer is sent to the worker');
+  assert.ok(requests[0].transfer.includes(bodyBuffer) && requests[0].transfer.includes(pairBuffer));
+  assert.equal(result.bodies.length, 38);
+  assert.equal(result.events.length, 4);
+  const diagnostics = window.FrameLabCompute.getDiagnostics();
+  assert.equal(diagnostics.wasmDebrisBatches, 1);
+  assert.ok(diagnostics.transferredBytes >= bodyBuffer.byteLength + pairBuffer.byteLength);
 });
