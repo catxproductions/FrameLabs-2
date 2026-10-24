@@ -1467,19 +1467,43 @@ async function projectMemberConstraints(){
   state[base]=node.position.x;state[base+1]=node.position.y;state[base+2]=node.velocity.x;state[base+3]=node.velocity.y;
   state[base+4]=node.referenceLevel===0?0:1/Math.max(.08,node.mass);
  }
- const edgeScratch=acquireScratchArray('constraintEdges',Float64Array,sim.memberLinks.length*4);let edgeCount=0;
- for(const link of sim.memberLinks){
-  if(!linkTransfersSupport(link))continue;
-  const aIndex=indices.get(link.nodeA),bIndex=indices.get(link.nodeB);if(aIndex==null||bIndex==null)continue;
-  const jointStiffness=Math.min(link.connectionA.stiffnessFactor||1,link.connectionB.stiffnessFactor||1);
-  const holding=(link.connectionA.pendingBreakUntil!=null&&sim.time<link.connectionA.pendingBreakUntil)||(link.connectionB.pendingBreakUntil!=null&&sim.time<link.connectionB.pendingBreakUntil);
-  const constraintGain=holding?Math.max(.48,jointStiffness):jointStiffness;
-  edgeScratch[edgeCount++]=aIndex;edgeScratch[edgeCount++]=bIndex;edgeScratch[edgeCount++]=link.restLength;edgeScratch[edgeCount++]=constraintGain;
- }
- if(!edgeCount)return;
- const edges=edgeScratch.subarray(0,edgeCount);
- const solved=await window.FrameLabCompute.projectConstraints(state,edges,QUALITY_PROFILE.constraintIterations);
+ const buildConstraintEdges=(edgeScratch)=>{
+  let edgeCount=0;
+  for(const link of sim.memberLinks){
+   if(!linkTransfersSupport(link))continue;
+   const aIndex=indices.get(link.nodeA),bIndex=indices.get(link.nodeB);if(aIndex==null||bIndex==null)continue;
+   const jointStiffness=Math.min(link.connectionA.stiffnessFactor||1,link.connectionB.stiffnessFactor||1);
+   const holding=(link.connectionA.pendingBreakUntil!=null&&sim.time<link.connectionA.pendingBreakUntil)||(link.connectionB.pendingBreakUntil!=null&&sim.time<link.connectionB.pendingBreakUntil);
+   const constraintGain=holding?Math.max(.48,jointStiffness):jointStiffness;
+   edgeScratch[edgeCount++]=aIndex;edgeScratch[edgeCount++]=bIndex;edgeScratch[edgeCount++]=link.restLength;edgeScratch[edgeCount++]=constraintGain;
+  }
+  return edgeCount?edgeScratch.subarray(0,edgeCount):null;
+ };
+ let edgeScratch=acquireScratchArray('constraintEdges',Float64Array,sim.memberLinks.length*4),edges=buildConstraintEdges(edgeScratch);
+ if(!edges)return;
+ const constraintResult=await window.FrameLabCompute.projectConstraints(state,edges,QUALITY_PROFILE.constraintIterations,{transferOwnership:true});
  if(sim!==activeSimulation)return;
+ let solved=constraintResult?.data,solvedEdges=constraintResult?.edges;
+ if(!solved){
+  // A transferred worker buffer is detached on failure. Repack from authoritative
+  // node/member objects and retry on the now-active CPU fallback.
+  const retryState=acquireScratchArray('constraintNodes',Float64Array,nodes.length*5);
+  for(let i=0;i<nodes.length;i++){
+   const node=nodes[i],base=i*5;
+   retryState[base]=node.position.x;retryState[base+1]=node.position.y;retryState[base+2]=node.velocity.x;retryState[base+3]=node.velocity.y;
+   retryState[base+4]=node.referenceLevel===0?0:1/Math.max(.08,node.mass);
+  }
+  edgeScratch=acquireScratchArray('constraintEdges',Float64Array,sim.memberLinks.length*4);
+  edges=buildConstraintEdges(edgeScratch);if(!edges)return;
+  solved=await window.FrameLabCompute.projectConstraints(retryState,edges,QUALITY_PROFILE.constraintIterations);
+  solvedEdges=edges;
+  if(sim!==activeSimulation)return;
+  retainScratchBuffer('constraintNodes',state,solved);
+  retainScratchBuffer('constraintEdges',edges,solvedEdges);
+ }else{
+  retainScratchBuffer('constraintNodes',state,solved);
+  retainScratchBuffer('constraintEdges',edges,solvedEdges);
+ }
  for(let i=0;i<nodes.length;i++){
   const node=nodes[i],base=i*5;node.position.x=solved[base];node.position.y=solved[base+1];node.velocity.x=solved[base+2];node.velocity.y=solved[base+3];
  }
