@@ -742,7 +742,7 @@ test('mock WebGPU integration and diagnostics reuse GPU buffers without changing
 
   const device = {
     limits: { maxBufferSize: 1 << 20, maxStorageBufferBindingSize: 1 << 20 },
-    lost: { then() {} },
+    lost: new Promise(() => {}),
     createBuffer({ size, usage }) {
       const buffer = {
         size, usage, storage: new ArrayBuffer(size), mapped: false, destroyed: false,
