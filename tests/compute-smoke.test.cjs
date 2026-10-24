@@ -730,3 +730,136 @@ test('debris-to-structure spatial index keeps nearby contacts and excludes remot
   assert.deepEqual(Array.from(columns, link => link.id), ['near-column']);
   assert.deepEqual(Array.from(floors, link => link.id), ['near-beam']);
 });
+
+
+test('mock WebGPU integration and diagnostics reuse GPU buffers without changing physics results', async () => {
+  const source = read('js/compute-backends.js');
+  const status = { textContent: '' };
+  const createdBuffers = [];
+  let submissions = 0;
+  const bufferUsage = { STORAGE: 1, COPY_DST: 2, COPY_SRC: 4, UNIFORM: 8, MAP_READ: 16 };
+  const mapMode = { READ: 1 };
+
+  const device = {
+    limits: { maxBufferSize: 1 << 20, maxStorageBufferBindingSize: 1 << 20 },
+    lost: { then() {} },
+    createBuffer({ size, usage }) {
+      const buffer = {
+        size, usage, storage: new ArrayBuffer(size), mapped: false, destroyed: false,
+        destroy() { this.destroyed = true; },
+        async mapAsync(_mode, offset = 0, length = size - offset) {
+          if (this.destroyed || offset + length > this.size) throw new Error('invalid map range');
+          this.mapped = true;
+        },
+        getMappedRange(offset = 0, length = size - offset) {
+          if (!this.mapped || this.destroyed) throw new Error('buffer is not mapped');
+          return this.storage.slice(offset, offset + length);
+        },
+        unmap() { this.mapped = false; }
+      };
+      createdBuffers.push(buffer);
+      return buffer;
+    },
+    createShaderModule({ code }) { return { code }; },
+    async createComputePipelineAsync({ compute }) {
+      return { code: compute.module.code, getBindGroupLayout() { return {}; } };
+    },
+    createBindGroup({ entries }) {
+      return { entries: Object.fromEntries(entries.map(entry => [entry.binding, entry.resource.buffer])) };
+    },
+    createCommandEncoder() {
+      const encoder = { pass: null, copies: [] };
+      encoder.beginComputePass = () => {
+        const pass = { pipeline: null, bindGroup: null,
+          setPipeline(pipeline) { this.pipeline = pipeline; },
+          setBindGroup(_index, bindGroup) { this.bindGroup = bindGroup; },
+          dispatchWorkgroups() {},
+          end() {}
+        };
+        encoder.pass = pass;
+        return pass;
+      };
+      encoder.copyBufferToBuffer = (from, fromOffset, to, toOffset, size) => {
+        encoder.copies.push({ from, fromOffset, to, toOffset, size });
+      };
+      encoder.finish = () => encoder;
+      return encoder;
+    },
+    queue: {
+      writeBuffer(buffer, offset, data) {
+        const src = data instanceof ArrayBuffer
+          ? new Uint8Array(data)
+          : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        new Uint8Array(buffer.storage, offset, src.byteLength).set(src);
+      },
+      submit(commands) {
+        submissions++;
+        for (const command of commands) {
+          const pass = command.pass;
+          if (pass) {
+            const bind = pass.bindGroup.entries, code = pass.pipeline.code;
+            if (code.includes('const STRIDE: u32 = 13u')) {
+              const bodies = new Float32Array(bind[0].storage), params = new DataView(bind[1].storage);
+              const count = params.getUint32(0, true), dt = params.getFloat32(4, true);
+              const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+              for (let i = 0; i < count; i++) {
+                const b = i * 13, maxVX = Math.max(0, bodies[b + 10]), maxVY = Math.max(0, bodies[b + 11]), maxOmega = Math.max(0, bodies[b + 12]);
+                const vx = clamp(bodies[b + 2] + bodies[b + 4] * dt, -maxVX, maxVX);
+                const vy = clamp(bodies[b + 3] + bodies[b + 5] * dt, -maxVY, maxVY);
+                const omegaStep = clamp(bodies[b + 7] + bodies[b + 8] * dt, -maxOmega, maxOmega);
+                const omega = omegaStep * clamp(bodies[b + 9], 0, 1);
+                bodies[b + 2] = vx; bodies[b + 3] = vy;
+                bodies[b] += vx * dt; bodies[b + 1] += vy * dt;
+                bodies[b + 7] = omega; bodies[b + 6] += omega * dt;
+              }
+            } else {
+              const input = new Float32Array(bind[0].storage), ratios = new Float32Array(bind[1].storage);
+              const count = new Uint32Array(bind[2].storage)[0];
+              for (let i = 0; i < count; i++) ratios[i] = Math.max(input[i * 2], 0) / Math.max(input[i * 2 + 1], 0.01);
+            }
+          }
+          for (const copy of command.copies) {
+            new Uint8Array(copy.to.storage, copy.toOffset, copy.size)
+              .set(new Uint8Array(copy.from.storage, copy.fromOffset, copy.size));
+          }
+        }
+      }
+    }
+  };
+  const adapter = { async requestDevice() { return device; } };
+  const window = {};
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: (id) => id === 'computeMetric' ? status : null
+  };
+  const navigator = { gpu: { async requestAdapter() { return adapter; } } };
+  vm.runInNewContext(source, {
+    window, document, navigator, URL, Float32Array, Float64Array, Uint32Array, ArrayBuffer, DataView,
+    Math, Number, Map, Set, performance, GPUBufferUsage: bufferUsage, GPUMapMode: mapMode
+  }, { filename: 'compute-backends-mock-gpu.test.js' });
+  window.FrameLabCompute.setMode('gpu');
+
+  const original = new Float32Array([1, 2, 1, -2, 2, 10, 0.5, 1, 2, 0.5, 3, 4, 5]);
+  const first = await window.FrameLabCompute.integrateBodies(new Float32Array(original), 0.05);
+  assert.equal(first.backend, 'WebGPU physics');
+  assert.ok(Math.abs(first.data[0] - 1.055) < 1e-6);
+  const afterFirstIntegration = createdBuffers.length;
+  const second = await window.FrameLabCompute.integrateBodies(new Float32Array(original), 0.05);
+  assert.equal(second.backend, 'WebGPU physics');
+  assert.equal(createdBuffers.length, afterFirstIntegration, 'body storage/uniform/readback buffers are reused');
+
+  const demand = new Float32Array(2048).fill(2), capacity = new Float32Array(2048).fill(1);
+  const firstScan = await window.FrameLabCompute.scan(demand, capacity);
+  assert.equal(firstScan.backend, 'WebGPU compute');
+  assert.equal(firstScan.maxUtil, 2);
+  const afterFirstScan = createdBuffers.length;
+  const secondScan = await window.FrameLabCompute.scan(demand, capacity);
+  assert.equal(secondScan.backend, 'WebGPU compute');
+  assert.equal(secondScan.meanUtil, 2);
+  assert.equal(createdBuffers.length, afterFirstScan, 'diagnostic input/output/readback/uniform buffers are reused');
+  const diagnostics = window.FrameLabCompute.getDiagnostics();
+  assert.equal(diagnostics.gpuIntegrationCalls, 2);
+  assert.ok(diagnostics.transferredBytes >= 0);
+  assert.ok(submissions >= 4, 'each GPU call submits a compute pass');
+});
