@@ -638,36 +638,87 @@
   async function benchmarkPhysicsBackends() {
     if (!navigator.gpu) {
       autoPreferGPU = false;
-      return { available: false, cpuAverageMs: null, gpuAverageMs: null, preferGPU: false, reason: 'WebGPU unavailable; Auto selects CPU worker' };
+      autoGPUThreshold = Infinity;
+      return { available: false, cpuAverageMs: null, gpuAverageMs: null, preferGPU: false,
+        autoGPUThreshold: null, reason: 'WebGPU unavailable; Auto selects CPU worker' };
     }
-    const count = 1024, packed = new Float32Array(count * BODY_STRIDE);
-    for (let i = 0; i < count; i++) {
-      const b = i * BODY_STRIDE;
-      packed[b] = (i % 37) * 0.03; packed[b + 1] = (i % 29) * 0.02;
-      packed[b + 2] = ((i % 7) - 3) * 0.01; packed[b + 3] = ((i % 11) - 5) * 0.01;
-      packed[b + 4] = ((i % 13) - 6) * 0.2; packed[b + 5] = -9.81;
-      packed[b + 6] = (i % 17) * 0.01; packed[b + 7] = ((i % 5) - 2) * 0.02;
-      packed[b + 8] = 0.1; packed[b + 9] = 0.998;
-      packed[b + 10] = 5; packed[b + 11] = 15; packed[b + 12] = 3.4;
+    const dt = 1 / 120;
+    const measurements = [];
+    function makeBodies(count) {
+      const packed = new Float32Array(count * BODY_STRIDE);
+      for (let i = 0; i < count; i++) {
+        const b = i * BODY_STRIDE;
+        packed[b] = (i % 37) * 0.03; packed[b + 1] = (i % 29) * 0.02;
+        packed[b + 2] = ((i % 7) - 3) * 0.01; packed[b + 3] = ((i % 11) - 5) * 0.01;
+        packed[b + 4] = ((i % 13) - 6) * 0.2; packed[b + 5] = -9.81;
+        packed[b + 6] = (i % 17) * 0.01; packed[b + 7] = ((i % 5) - 2) * 0.02;
+        packed[b + 8] = 0.1; packed[b + 9] = 0.998;
+        packed[b + 10] = 5; packed[b + 11] = 15; packed[b + 12] = 3.4;
+      }
+      return packed;
+    }
+    function median(values) {
+      values.sort((a, b) => a - b);
+      return values[Math.floor(values.length / 2)];
     }
     try {
-      // Warm both paths before timing; timings include worker/GPU round trips just like a live step.
-      await integrateWorker(new Float32Array(packed), 1 / 120);
-      await integrateGPU(new Float32Array(packed), 1 / 120);
-      const cpuSamples = [], gpuSamples = [];
-      for (let run = 0; run < 3; run++) {
-        let start = performance.now(); await integrateWorker(new Float32Array(packed), 1 / 120); cpuSamples.push(Math.max(0.01, performance.now() - start));
-        start = performance.now(); await integrateGPU(new Float32Array(packed), 1 / 120); gpuSamples.push(Math.max(0.01, performance.now() - start));
+      // A GPU win at one size is not enough to justify routing every batch there.
+      for (const count of GPU_BENCHMARK_COUNTS) {
+        const packed = makeBodies(count);
+        await integrateWorker(new Float32Array(packed), dt);
+        await integrateGPU(new Float32Array(packed), dt);
+        const cpuSamples = [], gpuSamples = [];
+        for (let run = 0; run < 3; run++) {
+          const measureCPU = async () => {
+            const start = performance.now();
+            await integrateWorker(new Float32Array(packed), dt);
+            cpuSamples.push(Math.max(0.01, performance.now() - start));
+          };
+          const measureGPU = async () => {
+            const start = performance.now();
+            await integrateGPU(new Float32Array(packed), dt);
+            gpuSamples.push(Math.max(0.01, performance.now() - start));
+          };
+          // Alternate timing order to reduce systematic measurement bias.
+          if (run % 2 === 0) { await measureCPU(); await measureGPU(); }
+          else { await measureGPU(); await measureCPU(); }
+        }
+        const cpuMedianMs = median(cpuSamples), gpuMedianMs = median(gpuSamples);
+        measurements.push({
+          count, cpuAverageMs: cpuMedianMs, gpuAverageMs: gpuMedianMs,
+          preferGPU: gpuMedianMs < cpuMedianMs * 0.85
+        });
       }
-      cpuSamples.sort((a, b) => a - b); gpuSamples.sort((a, b) => a - b);
-      const cpuAverageMs = cpuSamples[1], gpuAverageMs = gpuSamples[1];
-      // Require a 15% win to avoid choosing GPU based on noisy, effectively tied samples.
-      autoPreferGPU = gpuAverageMs < cpuAverageMs * 0.85;
-      return { available: true, count, cpuAverageMs, gpuAverageMs, preferGPU: autoPreferGPU,
-        reason: autoPreferGPU ? 'GPU body integration benchmarked faster' : 'CPU worker matched or beat GPU body integration' };
+      // Require a sustained 15% GPU win at this size and every larger tested size.
+      let crossoverIndex = -1;
+      for (let i = 0; i < measurements.length; i++) {
+        if (measurements[i].preferGPU && measurements.slice(i).every(sample => sample.preferGPU)) {
+          crossoverIndex = i;
+          break;
+        }
+      }
+      autoGPUThreshold = crossoverIndex < 0 ? Infinity : measurements[crossoverIndex].count;
+      autoPreferGPU = Number.isFinite(autoGPUThreshold);
+      const reference = measurements.find(sample => sample.count === 1024) || measurements[measurements.length - 1];
+      return {
+        available: true, count: reference.count,
+        cpuAverageMs: reference.cpuAverageMs, gpuAverageMs: reference.gpuAverageMs,
+        preferGPU: autoPreferGPU, autoGPUThreshold: Number.isFinite(autoGPUThreshold) ? autoGPUThreshold : null,
+        measurements,
+        reason: autoPreferGPU
+          ? `WebGPU repeatedly beats the CPU worker by at least 15% from ${autoGPUThreshold} bodies upward`
+          : 'CPU worker is faster or tied across the tested batch sizes'
+      };
     } catch (error) {
       autoPreferGPU = false;
-      return { available: false, count, cpuAverageMs: null, gpuAverageMs: null, preferGPU: false,
+      autoGPUThreshold = Infinity;
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        clearGPUBufferPools();
+      }
+      return { available: false, count: null, cpuAverageMs: null, gpuAverageMs: null,
+        preferGPU: false, autoGPUThreshold: null,
         reason: `CPU/GPU physics benchmark failed; Auto selects CPU worker (${error?.message || 'compute error'})` };
     }
   }
@@ -706,17 +757,22 @@
         backend = result.backend;
         setStatus(`${backend} · ${result.count} members`);
         return result;
-      } catch (_) {
-        gpuState = 'unavailable';
-        gpuDevice = null;
-        gpuPipeline = null;
-        gpuIntegratePipeline = null;
-        gpuInitPromise = null;
+      } catch (error) {
+        if (!(error instanceof GPUBufferLimitError)) {
+          gpuState = 'unavailable';
+          gpuDevice = null;
+          gpuPipeline = null;
+          gpuIntegratePipeline = null;
+          gpuInitPromise = null;
+          clearGPUBufferPools();
+        } else {
+          setRuntimeStatus('WebGPU diagnostic batch exceeds adapter limits; CPU diagnostic selected');
+        }
       }
     }
     const result = await scanCPU(demands, capacities);
     backend = result.backend;
-    setStatus(`${backend} · ${result.count} members`);
+    setRuntimeStatus(`${backend} · ${result.count} members`);
     return result;
   }
 
@@ -738,8 +794,11 @@
       const averageMs = (samples[0] + samples[1] + samples[2]) / 3;
       return { available: true, averageMs, throughput: count / (averageMs / 1000), reason: 'WebGPU compute available' };
     } catch (error) {
-      gpuState = 'unavailable';
-      gpuDevice = null; gpuPipeline = null; gpuInitPromise = null;
+      if (!(error instanceof GPUBufferLimitError)) {
+        gpuState = 'unavailable';
+        gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
+        clearGPUBufferPools();
+      }
       return { available: false, averageMs: null, throughput: 0, reason: `GPU scan unavailable: ${error?.message || 'initialization failed'}` };
     }
   }
@@ -759,6 +818,14 @@
     resolveDebrisPairs,
     bodyStride: BODY_STRIDE,
     getGPUState: () => gpuState,
+    getDiagnostics: () => ({
+      mode: physicsMode, gpuState,
+      autoGPUThreshold: Number.isFinite(autoGPUThreshold) ? autoGPUThreshold : null,
+      gpuBodyLimitBytes: Number.isFinite(gpuBodyLimitBytes) ? gpuBodyLimitBytes : null,
+      bodyBufferCapacityBytes: gpuBuffers.body.stateCapacity || 0,
+      scanBufferCapacityBytes: gpuBuffers.scan.inputCapacity || 0,
+      ...computeStats
+    }),
     getWorkerURL: () => workerURL.href
   };
 })();
