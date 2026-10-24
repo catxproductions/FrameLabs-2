@@ -495,3 +495,17 @@ test('collapse and impact events emit dust, burning sources emit smoke, and canv
   assert.match(js, /maxParticles:360/);
   assert.match(js, /maxParticles:600/);
 });
+
+
+test('debris collision hot path is routed to optional C++ WebAssembly with JavaScript fallback', () => {
+  const main = read('js/main.js');
+  const backend = read('js/compute-backends.js');
+  const worker = read('js/compute-worker.js');
+  const cpp = read('cpp/physics_core.cpp');
+  assert.match(main, /await resolveDebrisCollisions\(dt\)/);
+  assert.match(main, /FrameLabCompute\?\.resolveDebrisPairs/);
+  assert.match(backend, /async function resolveDebrisPairs\(bodies, pairs, moisture = 0\)/);
+  assert.match(worker, /payload\.type === 'resolveDebrisPairs'/);
+  assert.match(cpp, /int resolve_debris_pairs\(/);
+  assert.match(main, /finishDebrisCollisionFragments\(fragments\)/);
+});

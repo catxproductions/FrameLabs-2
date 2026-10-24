@@ -159,7 +159,7 @@ __attribute__((visibility("default"))) int resolve_debris_pairs(
     const double hbx = (__builtin_fabs(cb) * b[6] + __builtin_fabs(sb) * b[7]) * 0.5;
     const double hby = (__builtin_fabs(sb) * b[6] + __builtin_fabs(cb) * b[7]) * 0.5;
     if (a[0] + hax < b[0] - hbx || b[0] + hbx < a[0] - hax ||
-        a[1] + hay < b[1] - hby || b[1] + hby < a[1] - h ay) continue;
+        a[1] + hay < b[1] - hby || b[1] + hby < a[1] - hay) continue;
 
     const double dx = b[0] - a[0], dy = b[1] - a[1];
     const double rvCenterX = b[2] - a[2], rvCenterY = b[3] - a[3];

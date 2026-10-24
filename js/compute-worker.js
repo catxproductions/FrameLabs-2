@@ -18,7 +18,7 @@ if (typeof fetch === 'function' && typeof WebAssembly === 'object') {
       const loaded = await WebAssembly.instantiate(await response.arrayBuffer());
       const api = loaded.instance.exports;
       if (api.abi_version() !== 1 || !api.memory || !api.alloc || !api.reset_alloc ||
-          !api.project_constraints || !api.integrate_bodies) {
+          !api.project_constraints || !api.integrate_bodies || !api.resolve_debris_pairs) {
         throw new Error('Unsupported physics-core WebAssembly ABI');
       }
       return api;
@@ -107,8 +107,56 @@ function runWasmConstraints(api, nodes, edges, iterations) {
   }
 }
 
+
+function runWasmDebrisPairs(api, bodyBuffer, pairBuffer, moisture) {
+  const stride = 17;
+  if (!api || !(bodyBuffer instanceof ArrayBuffer) || !(pairBuffer instanceof ArrayBuffer) ||
+      bodyBuffer.byteLength % (stride * Float64Array.BYTES_PER_ELEMENT) !== 0 ||
+      pairBuffer.byteLength % (2 * Uint32Array.BYTES_PER_ELEMENT) !== 0) return null;
+  const bodyCount = bodyBuffer.byteLength / (stride * Float64Array.BYTES_PER_ELEMENT);
+  const pairCount = pairBuffer.byteLength / (2 * Uint32Array.BYTES_PER_ELEMENT);
+  if (!bodyCount || !pairCount) return null;
+  try {
+    api.reset_alloc();
+    const bodiesPtr = api.alloc(bodyBuffer.byteLength);
+    const pairsPtr = api.alloc(pairBuffer.byteLength);
+    const eventsBytes = pairCount * 4 * Float64Array.BYTES_PER_ELEMENT;
+    const eventsPtr = api.alloc(eventsBytes);
+    if (!bodiesPtr || !pairsPtr || !eventsPtr) return null;
+    new Float64Array(api.memory.buffer, bodiesPtr, bodyBuffer.byteLength / 8).set(new Float64Array(bodyBuffer));
+    new Uint32Array(api.memory.buffer, pairsPtr, pairBuffer.byteLength / 4).set(new Uint32Array(pairBuffer));
+    if (api.resolve_debris_pairs(bodiesPtr, pairsPtr, eventsPtr, bodyCount, pairCount, Number(moisture) || 0) !== 0) return null;
+    const bodies = new Float64Array(bodyBuffer.byteLength / 8);
+    const events = new Float64Array(pairCount * 4);
+    bodies.set(new Float64Array(api.memory.buffer, bodiesPtr, bodies.length));
+    events.set(new Float64Array(api.memory.buffer, eventsPtr, events.length));
+    return { bodies, events };
+  } catch (_) {
+    return null;
+  } finally {
+    api.reset_alloc();
+  }
+}
+
 function handlePhysicsRequest(payload, api) {
   const { id } = payload;
+  if (payload.type === 'resolveDebrisPairs') {
+    try {
+      const result = runWasmDebrisPairs(api, payload.bodies, payload.pairs, payload.moisture);
+      if (!result) {
+        self.postMessage({ id, type: 'resolveDebrisPairs', backend: 'JavaScript fallback required' });
+        return;
+      }
+      self.postMessage({
+        id, type: 'resolveDebrisPairs',
+        backend: 'C++ WebAssembly · debris collision solver',
+        bodies: result.bodies.buffer, events: result.events.buffer
+      }, [result.bodies.buffer, result.events.buffer]);
+    } catch (error) {
+      self.postMessage({ id, type: 'resolveDebrisPairs', backend: 'JavaScript fallback required', error: error?.message });
+    }
+    return;
+  }
   if (payload.type === 'integrateBodies') {
     try {
       const wasmData = runWasmIntegration(api, payload.data, payload.dt);
@@ -181,7 +229,7 @@ self.onmessage = (event) => {
     return;
   }
 
-  if (payload.type === 'integrateBodies' || payload.type === 'projectConstraints') {
+  if (payload.type === 'integrateBodies' || payload.type === 'projectConstraints' || payload.type === 'resolveDebrisPairs') {
     const execute = (api) => handlePhysicsRequest(payload, api);
     if (wasmLoadPromise) wasmLoadPromise.then(execute).catch(() => execute(null));
     else execute(null);

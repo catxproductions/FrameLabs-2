@@ -1625,7 +1625,7 @@ async function updateDebris(dt){
   }
   if(Math.abs(d.x)>NX*STORY_HEIGHT*1.8){d.x=clamp(d.x,-NX*STORY_HEIGHT*.5,NX*STORY_HEIGHT*1.5);d.vx*=-.25}
  }
- resolveDebrisCollisions(dt);for(const d of sim.debris)containDebrisInGrid(d);
+ await resolveDebrisCollisions(dt);for(const d of sim.debris)containDebrisInGrid(d);
 }
 function debrisProjectionRadius(d,axisX,axisY){const ux=Math.cos(d.angle),uy=Math.sin(d.angle),vx=-uy,vy=ux;return Math.abs(ux*axisX+uy*axisY)*d.length*.5+Math.abs(vx*axisX+vy*axisY)*d.thickness*.5}
 function debrisInverseMass(d){return (d.settled ? .12 : 1)/Math.max(.025,d.mass)}
@@ -1636,10 +1636,67 @@ function fragmentDebris(d,energy){
  for(const sign of [-1,1]){const child={...d,id:sim.nextDebrisId++,sourceId:`fragment:${d.id}`,x:d.x+Math.cos(d.angle)*sign*childLength*.18,y:d.y+Math.sin(d.angle)*sign*childLength*.18,angle:d.angle+sign*.10,length:childLength,thickness:childThickness,mass:childMass,capacity:Math.max(.01,d.capacity*.38),durability:Math.max(.5,d.durability*.34),integrity:.62,vx:clamp(d.vx+sign*Math.cos(d.angle)*kick,-MAX_FALL_SPEED,MAX_FALL_SPEED),vy:clamp(d.vy+sign*Math.sin(d.angle)*kick+.12,-MAX_FALL_SPEED,MAX_FALL_SPEED),angularVelocity:clamp(d.angularVelocity+sign*.32,-3.2,3.2),momentOfInertia:Math.max(.01,childMass*childLength*childLength/12),age:0,settled:false,grounded:false,fragmentDepth:(d.fragmentDepth||0)+1,fragmented:false,reason:`fragmented after impact · ${d.material}`,impactCooldown:-Infinity,impactCount:(d.impactCount||0)+1};updateDebrisBounds(child);next.push(child)}
  sim.debris.splice(index,1,...next);return true;
 }
-function resolveDebrisCollisions(dt){
- if(sim.debris.length<2)return;const cellSize=STORY_HEIGHT*1.25,buckets=new Map(),pairs=new Set(),live=sim.debris.slice(),debrisById=new Map(live.map(d=>[d.id,d]));
+function finishDebrisCollisionFragments(fragments){
+ const uniqueFragments=[...new Map(fragments.map(([d,e])=>[d.id,[d,e]])).values()];
+ for(const [d,e] of uniqueFragments)if(sim.debris.includes(d)&&sim.debris.length<MAX_DEBRIS)fragmentDebris(d,e);
+ if(sim.debris.length>MAX_DEBRIS){sim.debris.sort((a,b)=>Number(b.settled)-Number(a.settled)||b.age-a.age);sim.debris.splice(0,sim.debris.length-MAX_DEBRIS)}
+}
+async function resolveDebrisCollisions(dt){
+ if(sim.debris.length<2)return;const activeSimulation=sim,cellSize=STORY_HEIGHT*1.25,buckets=new Map(),pairs=new Set(),live=sim.debris.slice(),debrisById=new Map(live.map(d=>[d.id,d]));
  for(const d of live){updateDebrisBounds(d);const b=d.collisionBounds,x0=Math.floor(b.left/cellSize),x1=Math.floor(b.right/cellSize),y0=Math.floor(b.bottom/cellSize),y1=Math.floor(b.top/cellSize);for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++){const k=`${x}:${y}`;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(d)}}
  for(const bucket of buckets.values())for(let i=0;i<bucket.length;i++)for(let j=i+1;j<bucket.length;j++){const a=bucket[i],b=bucket[j];if(a===b)continue;const key=a.id<b.id?`${a.id}:${b.id}`:`${b.id}:${a.id}`;pairs.add(key)}
+
+ const wasmPairIndices=[],indexById=new Map(live.map((d,i)=>[d.id,i]));
+ for(const pairKey of pairs){
+  const ids=pairKey.split(':').map(Number),idA=ids[0],idB=ids[1],ia=indexById.get(idA),ib=indexById.get(idB),a=debrisById.get(idA),b=debrisById.get(idB);
+  if(!a||!b||ia==null||ib==null||(a.settled&&b.settled))continue;
+  wasmPairIndices.push(ia,ib);
+ }
+ // Worker transfer overhead only pays off for a substantial collision batch.
+ if(wasmPairIndices.length>=32&&window.FrameLabCompute?.resolveDebrisPairs){
+  const stride=17,packed=new Float64Array(live.length*stride),wasSettled=live.map(d=>!!d.settled),materialLibrary=PHYSICS_MODEL?.materials||{};
+  for(let i=0;i<live.length;i++){
+   const d=live[i],m=materialLibrary[d.material]||{},b=i*stride;
+   packed[b]=Number(d.x)||0;packed[b+1]=Number(d.y)||0;packed[b+2]=Number(d.vx)||0;packed[b+3]=Number(d.vy)||0;
+   packed[b+4]=Number(d.angle)||0;packed[b+5]=Number(d.angularVelocity)||0;packed[b+6]=Math.max(.01,Number(d.length)||.01);
+   packed[b+7]=Math.max(.01,Number(d.thickness)||.01);packed[b+8]=Math.max(.025,Number(d.mass)||.025);packed[b+9]=d.settled?1:0;
+   packed[b+10]=Math.max(.01,Number(d.durability)||1);packed[b+11]=clamp(Number(d.integrity??1),0,1);packed[b+12]=Math.max(0,Number(d.fragmentDepth)||0);
+   packed[b+13]=Number.isFinite(Number(m.staticFriction))?Number(m.staticFriction):.5;
+   packed[b+14]=Number.isFinite(Number(m.dynamicFriction))?Number(m.dynamicFriction):.32;
+   packed[b+15]=Number.isFinite(Number(m.restitution))?Number(m.restitution):IMPACT_RESTITUTION;
+   packed[b+16]=Number.isFinite(Number(m.wetSensitivity))?Number(m.wetSensitivity):0;
+  }
+  const wasmResult=await window.FrameLabCompute.resolveDebrisPairs(packed,new Uint32Array(wasmPairIndices),ENVIRONMENT.moisture);
+  if(sim!==activeSimulation)return;
+  if(wasmResult&&wasmResult.backend==='C++ WebAssembly · debris collision solver'&&wasmResult.bodies.length===packed.length&&wasmResult.events.length===wasmPairIndices.length*2){
+   for(let i=0;i<live.length;i++){
+    const d=live[i],b=i*stride;d.x=wasmResult.bodies[b];d.y=wasmResult.bodies[b+1];d.vx=wasmResult.bodies[b+2];d.vy=wasmResult.bodies[b+3];
+    d.angle=wasmResult.bodies[b+4];d.angularVelocity=wasmResult.bodies[b+5];d.settled=!!wasmResult.bodies[b+9];
+    if(wasSettled[i]&&!d.settled)d.grounded=false;
+    updateDebrisBounds(d);
+   }
+   const fragments=[];
+   for(let p=0;p<wasmPairIndices.length/2;p++){
+    const row=p*4;if(wasmResult.events[row]<.5)continue;
+    const a=live[wasmPairIndices[p*2]],b=live[wasmPairIndices[p*2+1]];
+    if(!a||!b)continue;
+    const closing=wasmResult.events[row+2],energy=wasmResult.events[row+3];
+    const pairKey=(a.id<b.id?a.id+':'+b.id:b.id+':'+a.id),stamp='debris-impact:'+pairKey;
+    const freshImpact=sim.time-(sim.collisionPairs[stamp]??-Infinity)>.18;
+    if(closing>.8&&energy>.05&&freshImpact){
+     sim.collisionPairs[stamp]=sim.time;
+     const damageA=Math.min(.35,energy/Math.max(1,a.durability||1)*.22),damageB=Math.min(.35,energy/Math.max(1,b.durability||1)*.22);
+     a.integrity=clamp((a.integrity??1)-damageA,0,1);b.integrity=clamp((b.integrity??1)-damageB,0,1);
+     a.impactCount=(a.impactCount||0)+1;b.impactCount=(b.impactCount||0)+1;
+     a.reason=a.reason||'debris collision';b.reason=b.reason||'debris collision';
+     if((energy>Math.max(1,(a.durability||1)*.85)||a.integrity<.12)&&a.fragmentDepth<2)fragments.push([a,energy]);
+     if((energy>Math.max(1,(b.durability||1)*.85)||b.integrity<.12)&&b.fragmentDepth<2)fragments.push([b,energy]);
+    }
+   }
+   finishDebrisCollisionFragments(fragments);
+   return;
+  }
+ }
  const fragments=[];
  for(const pairKey of pairs){const [idA,idB]=pairKey.split(':').map(Number),a=debrisById.get(idA),b=debrisById.get(idB);if(!a||!b||!sim.debris.includes(a)||!sim.debris.includes(b))continue;if(a.settled&&b.settled)continue;
   const ba=a.collisionBounds,bb=b.collisionBounds;if(ba.right<bb.left||bb.right<ba.left||ba.top<bb.bottom||bb.top<ba.bottom)continue;
@@ -1657,8 +1714,7 @@ function resolveDebrisCollisions(dt){
   const stamp=`debris-impact:${pairKey}`,freshImpact=sim.time-(sim.collisionPairs[stamp]??-Infinity)>.18;if(closing>.8&&energy>.05&&freshImpact){sim.collisionPairs[stamp]=sim.time;const damageA=Math.min(.35,energy/Math.max(1,a.durability||1)*.22),damageB=Math.min(.35,energy/Math.max(1,b.durability||1)*.22);a.integrity=clamp((a.integrity??1)-damageA,0,1);b.integrity=clamp((b.integrity??1)-damageB,0,1);a.impactCount=(a.impactCount||0)+1;b.impactCount=(b.impactCount||0)+1;a.reason=a.reason||'debris collision';b.reason=b.reason||'debris collision';if((energy>Math.max(1,(a.durability||1)*.85)||a.integrity<.12)&&a.fragmentDepth<2)fragments.push([a,energy]);if((energy>Math.max(1,(b.durability||1)*.85)||b.integrity<.12)&&b.fragmentDepth<2)fragments.push([b,energy]);}
   a.vx=clamp(a.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vx=clamp(b.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);a.vy=clamp(a.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vy=clamp(b.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);updateDebrisBounds(a);updateDebrisBounds(b);
  }
- const uniqueFragments=[...new Map(fragments.map(([d,e])=>[d.id,[d,e]])).values()];for(const [d,e] of uniqueFragments)if(sim.debris.includes(d)&&sim.debris.length<MAX_DEBRIS)fragmentDebris(d,e);
- if(sim.debris.length>MAX_DEBRIS){sim.debris.sort((a,b)=>Number(b.settled)-Number(a.settled)||b.age-a.age);sim.debris.splice(0,sim.debris.length-MAX_DEBRIS)}
+ finishDebrisCollisionFragments(fragments);
 }
 function snapBeamAtMidspan(link,bending){
  const e=link?.e;if(!e||e.failed||e.snapped)return false;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)return false;
