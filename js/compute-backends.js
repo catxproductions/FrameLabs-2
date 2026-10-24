@@ -71,7 +71,11 @@
     }, 250);
   }
   class GPUBufferLimitError extends RangeError {
-    constructor(message) { super(message); this.name = 'GPUBufferLimitError'; }
+    constructor(message, limitBytes = Infinity) {
+      super(message);
+      this.name = 'GPUBufferLimitError';
+      if (Number.isFinite(Number(limitBytes)) && Number(limitBytes) >= 0) this.limitBytes = Number(limitBytes);
+    }
   }
   function destroyBufferPool(pool) {
     for (const key of Object.keys(pool)) {
@@ -94,7 +98,7 @@
       Number(maxSize) || Infinity
     );
     if (requiredSize > hardLimit) {
-      throw new GPUBufferLimitError(`Requested GPU buffer (${requiredSize} bytes) exceeds this adapter's limit (${hardLimit} bytes).`);
+      throw new GPUBufferLimitError(`Requested GPU buffer (${requiredSize} bytes) exceeds this adapter's limit (${hardLimit} bytes).`, hardLimit);
     }
     const capacityKey = `${key}Capacity`;
     if (pool[key] && (pool[capacityKey] || 0) >= requiredSize) return pool[key];
@@ -258,6 +262,7 @@
         gpuInitPromise = null;
         autoPreferGPU = false;
         autoGPUThreshold = Infinity;
+        gpuBodyLimitBytes = Infinity;
         clearGPUBufferPools();
         gpuState = `lost${info && info.message ? `: ${info.message}` : ''}`;
         backend = worker ? 'Web Worker (CPU)' : 'Main-thread fallback';
@@ -271,6 +276,7 @@
       gpuInitPromise = null;
       autoPreferGPU = false;
       autoGPUThreshold = Infinity;
+      gpuBodyLimitBytes = Infinity;
       clearGPUBufferPools();
       throw error;
     });
@@ -385,7 +391,7 @@
     const bytes = packed.byteLength;
     const maxStateBytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
     if (bytes > maxStateBytes) {
-      throw new GPUBufferLimitError("Physics batch exceeds this GPU adapter's storage-buffer limit");
+      throw new GPUBufferLimitError("Physics batch exceeds this GPU adapter's storage-buffer limit", maxStateBytes);
     }
     let mapped = false;
     // Reuse storage/uniform/readback buffers across fixed 120 Hz steps. Creating
@@ -703,11 +709,16 @@
       } catch (error) {
         computeStats.gpuFallbacks++;
         if (error instanceof GPUBufferLimitError) {
-          gpuBodyLimitBytes = Math.min(gpuBodyLimitBytes, Math.max(0, packed.byteLength - 4));
+          const reportedLimit = Number(error.limitBytes);
+          const strideBytes = BODY_STRIDE * Float32Array.BYTES_PER_ELEMENT;
+          const safeLimit = Number.isFinite(reportedLimit)
+            ? Math.floor(reportedLimit / strideBytes) * strideBytes
+            : Math.max(0, packed.byteLength - strideBytes);
+          gpuBodyLimitBytes = Math.min(gpuBodyLimitBytes, Math.max(0, safeLimit));
           setRuntimeStatus('WebGPU batch exceeds adapter limit; using CPU for this batch');
         } else {
           gpuState = 'unavailable'; gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
-          autoPreferGPU = false; autoGPUThreshold = Infinity; clearGPUBufferPools();
+          autoPreferGPU = false; autoGPUThreshold = Infinity; gpuBodyLimitBytes = Infinity; clearGPUBufferPools();
           if (physicsMode === 'gpu') setStatus(`WebGPU failed; using CPU · ${error?.message || 'GPU error'}`);
         }
       }
