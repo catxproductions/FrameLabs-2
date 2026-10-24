@@ -296,6 +296,18 @@ test('actual node and debris motion paths use the compute backend, not only the 
   assert.match(read('index.html'), /id="computeMode"/);
 });
 
+test('live motion paths pass the typed-array constructor to the scratch-buffer helper', () => {
+  const js = read('js/main.js');
+  assert.match(js, /acquireScratchArray\('nodeMotionPacked',Float32Array,motionNodes\.length\*stride\)/);
+  assert.match(js, /acquireScratchArray\('debrisMotionPacked',Float32Array,motionBodies\.length\*stride\)/);
+  for (const line of js.split('\n')) {
+    if (!line.includes('acquireScratchArray(') || line.includes('function acquireScratchArray')) continue;
+    const match = line.match(/acquireScratchArray\(([^)]*)\)/);
+    assert.ok(match, `scratch buffer call is parseable: ${line}`);
+    assert.match(match[1], /^(?:'[^']+'|[^,]+),\s*(?:Float32Array|Float64Array),\s*.+$/, `scratch buffer call supplies key, typed-array constructor, and length: ${match[1]}`);
+  }
+});
+
 test('automatic physics benchmarking conservatively chooses CPU when WebGPU is unavailable', async () => {
   const source = read('js/compute-backends.js');
   const window = {};

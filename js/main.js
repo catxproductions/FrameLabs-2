@@ -1591,7 +1591,7 @@ async function updateMemberPhysics(dt){
  }
  if(motionNodes.length){
   const stride=window.FrameLabCompute?.bodyStride||13;
-  const packed=packMotionNodes(motionNodes,stride,acquireScratchArray('nodeMotionPacked',motionNodes.length*stride));
+  const packed=packMotionNodes(motionNodes,stride,acquireScratchArray('nodeMotionPacked',Float32Array,motionNodes.length*stride));
   const result=await integrateMotionBatch(packed,dt,'nodeMotionPacked',()=>packMotionNodes(motionNodes,stride));
   if(sim!==activeSimulation)return;
   for(let i=0;i<motionNodes.length;i++){
@@ -1668,7 +1668,7 @@ async function updateDebris(dt){
  }
  if(motionBodies.length){
   const stride=window.FrameLabCompute?.bodyStride||13;
-  const packed=packMotionBodies(motionBodies,stride,acquireScratchArray('debrisMotionPacked',motionBodies.length*stride));
+  const packed=packMotionBodies(motionBodies,stride,acquireScratchArray('debrisMotionPacked',Float32Array,motionBodies.length*stride));
   const result=await integrateMotionBatch(packed,dt,'debrisMotionPacked',()=>packMotionBodies(motionBodies,stride));
   if(sim!==activeSimulation)return;
   for(let i=0;i<motionBodies.length;i++){
