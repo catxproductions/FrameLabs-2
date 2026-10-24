@@ -77,3 +77,8 @@ GitHub Actions builds and commits the compiled `js/physics-core.wasm` asset to t
 ### Before increasing solver quality
 
 Profile the same saved design in small, medium, and large structures with the JavaScript fallback and the WebAssembly kernel. Compare frame time and maximum link stretch, and check that collapse motion still looks plausible. No browser-performance gain is claimed until this is measured on real devices.
+
+
+### C++ debris-contact computation
+
+The optional C++/WebAssembly worker handles oriented-box contact checks, penetration correction, normal and friction impulses, angular response, and impact-energy estimates for sufficiently large debris-pair batches. JavaScript still builds the spatial hash, applies impact damage and fragmentation decisions, and retains the original collision solver as a fallback when Wasm is unavailable or the batch is small. Browser profiling is still needed before claiming an end-user speedup.

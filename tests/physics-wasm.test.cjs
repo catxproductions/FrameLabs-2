@@ -130,3 +130,38 @@ test('C++ body integration matches Float32 JavaScript integration', async () => 
     api.reset_alloc();
   }
 });
+
+
+test('C++ debris collision solver separates overlapping bodies and reports impact energy', async () => {
+  const api = await loadKernel();
+  assert.equal(typeof api.resolve_debris_pairs, 'function');
+  const stride = 19;
+  const a = [0, 0, 1, 0, 0, 0, 2, 1, 1, 0, 10, 1, 0, 0.6, 0.35, 0.12, 0.2, 1, 0];
+  const b = [1.5, 0, -1, 0, 0, 0, 2, 1, 1, 0, 10, 1, 0, 0.7, 0.30, 0.16, 0.15, 1, 0];
+  const bodies = new Float64Array([...a, ...b]);
+  assert.equal(bodies.length, stride * 2);
+  const pairs = new Uint32Array([0, 1]);
+  api.reset_alloc();
+  try {
+    const bodiesPtr = api.alloc(bodies.byteLength);
+    const pairsPtr = api.alloc(pairs.byteLength);
+    const eventsPtr = api.alloc(4 * Float64Array.BYTES_PER_ELEMENT);
+    assert.ok(bodiesPtr && pairsPtr && eventsPtr);
+    new Float64Array(api.memory.buffer, bodiesPtr, bodies.length).set(bodies);
+    new Uint32Array(api.memory.buffer, pairsPtr, pairs.length).set(pairs);
+    assert.equal(api.resolve_debris_pairs(bodiesPtr, pairsPtr, eventsPtr, 2, 1, 0), 0);
+    const solved = new Float64Array(bodies.length);
+    solved.set(new Float64Array(api.memory.buffer, bodiesPtr, bodies.length));
+    const events = new Float64Array(4);
+    events.set(new Float64Array(api.memory.buffer, eventsPtr, 4));
+    assert.equal(events[0], 1);
+    assert.ok(events[1] > 0);
+    assert.ok(events[2] > 0);
+    assert.ok(events[3] > 0);
+    assert.ok(solved[0] < 0);
+    assert.ok(solved[stride] > 1.5);
+    assert.ok(Number.isFinite(solved[2]) && Number.isFinite(solved[stride + 2]));
+  } finally {
+    api.reset_alloc();
+  }
+});

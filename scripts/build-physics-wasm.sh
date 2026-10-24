@@ -14,7 +14,7 @@ trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 "$CXX" --target=wasm32-unknown-unknown -std=c++17 -O3 -fno-exceptions -fno-rtti -nostdlib \
   -c "$ROOT/cpp/physics_core.cpp" -o "$TMP/physics_core.o"
 "$WASM_LD" --no-entry --export-memory --export=alloc --export=reset_alloc \
-  --export=project_constraints --export=integrate_bodies --export=abi_version \
+  --export=project_constraints --export=integrate_bodies --export=resolve_debris_pairs --export=abi_version \
   --initial-memory=2097152 --max-memory=268435456 --stack-first \
   -o "$OUT" "$TMP/physics_core.o"
 echo "Built WebAssembly physics core: $OUT"

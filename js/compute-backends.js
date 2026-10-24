@@ -357,6 +357,51 @@
     });
   }
 
+
+  async function resolveDebrisPairs(bodies, pairs, moisture = 0) {
+    if (!(bodies instanceof Float64Array) || bodies.length % 19 !== 0 ||
+        !(pairs instanceof Uint32Array) || pairs.length % 2 !== 0) {
+      throw new TypeError('Debris collision solve requires 17-value Float64 bodies and uint32 index pairs.');
+    }
+    if (!pairs.length || physicsMode === 'main' || !worker) return null;
+    const id = ++sequence;
+    return new Promise((resolve, reject) => {
+      pending.set(id, {
+        resolve: (message) => {
+          if (!message || !String(message.backend || '').includes('C++ WebAssembly') ||
+              !(message.bodies instanceof ArrayBuffer) || !(message.events instanceof ArrayBuffer)) {
+            resolve(null);
+            return;
+          }
+          const resultBodies = new Float64Array(message.bodies);
+          const events = new Float64Array(message.events);
+          if (resultBodies.length !== bodies.length || events.length !== pairs.length * 2) {
+            resolve(null);
+            return;
+          }
+          physicsBackend = message.backend;
+          backend = message.backend;
+          setStatus(message.backend + ' · ' + (pairs.length / 2) + ' debris pairs');
+          resolve({ backend: message.backend, bodies: resultBodies, events });
+        },
+        reject
+      });
+      try {
+        const bodyCopy = new Float64Array(bodies), pairCopy = new Uint32Array(pairs);
+        worker.postMessage({
+          id, type: 'resolveDebrisPairs', bodies: bodyCopy.buffer,
+          pairs: pairCopy.buffer, moisture: Number(moisture) || 0
+        }, [bodyCopy.buffer, pairCopy.buffer]);
+      } catch (error) {
+        pending.delete(id);
+        resolve(null);
+      }
+    }).catch((error) => {
+      if (worker) disableWorker(error);
+      return null;
+    });
+  }
+
   async function projectConstraints(nodes, edges, iterations) {
     if (!(nodes instanceof Float64Array) || nodes.length % 5 !== 0 || !(edges instanceof Float64Array) || edges.length % 4 !== 0) {
       throw new TypeError('Constraint projection requires Float64 node state (5 values per node) and edge state (4 values per link).');
@@ -557,6 +602,7 @@
     setMode,
     integrateBodies,
     projectConstraints,
+    resolveDebrisPairs,
     bodyStride: BODY_STRIDE,
     getGPUState: () => gpuState,
     getWorkerURL: () => workerURL.href
