@@ -284,7 +284,12 @@ test('actual node and debris motion paths use the compute backend, not only the 
   assert.match(js, /async function updateDebris\(dt\)/);
   assert.match(js, /await integrateMotionBatch\(packed,dt,'nodeMotionPacked'/);
   assert.match(js, /await integrateMotionBatch\(packed,dt,'debrisMotionPacked'/);
-  assert.match(js, /await window\.FrameLabCompute\.projectConstraints\(state,edges,QUALITY_PROFILE\.constraintIterations\)/);
+  assert.match(js, /await window\.FrameLabCompute\.projectConstraints\(state,edges,QUALITY_PROFILE\.constraintIterations,\{transferOwnership:true\}\)/);
+  assert.match(js, /function buildDebrisMemberCollisionIndex\(\)/);
+  assert.match(js, /queryDebrisMemberCollisionLinks\(collisionIndex\.columns/);
+  assert.match(js, /queryDebrisMemberCollisionLinks\(collisionIndex\.floors/);
+  assert.match(read('js/compute-worker.js'), /Number\.isInteger\(payload\.nodeLength\)/);
+  assert.match(read('js/compute-worker.js'), /edges: edges\.buffer/);
   assert.match(read('js/compute-backends.js'), /worker\.postMessage\(\{\s*id, type: 'projectConstraints'/);
   assert.match(js, /await updateMemberPhysics\(dt\)[\s\S]*await updateDebris\(dt\)/);
   assert.match(js, /async function processPhysicsSteps\(\)/);
@@ -631,4 +636,52 @@ test('large debris solver can transfer exact input batches without backend copie
   const diagnostics = window.FrameLabCompute.getDiagnostics();
   assert.equal(diagnostics.wasmDebrisBatches, 1);
   assert.ok(diagnostics.transferredBytes >= bodyBuffer.byteLength + pairBuffer.byteLength);
+});
+
+
+test('constraint worker transfers reusable scratch buffers and preserves active view lengths', async () => {
+  const backendSource = read('js/compute-backends.js');
+  const workerSource = read('js/compute-worker.js');
+  const status = { textContent: '' };
+  const requests = [];
+  class ConstraintWorkerMock {
+    constructor() {
+      const owner = this;
+      const self = { postMessage: (data) => queueMicrotask(() => owner.onmessage?.({ data })) };
+      vm.runInNewContext(workerSource, { self, ArrayBuffer, Float32Array, Float64Array, Math, Number }, { filename: 'constraint-worker-transfer.test.js' });
+      this.workerOnMessage = self.onmessage;
+    }
+    postMessage(message, transfer = []) {
+      requests.push({ message, transfer });
+      queueMicrotask(() => this.workerOnMessage({ data: message }));
+    }
+    terminate() {}
+  }
+  const window = { Worker: ConstraintWorkerMock };
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: (id) => id === 'computeMetric' ? status : null
+  };
+  vm.runInNewContext(backendSource, {
+    window, document, navigator: {}, Worker: ConstraintWorkerMock, URL,
+    Float32Array, Float64Array, Uint32Array, ArrayBuffer
+  }, { filename: 'compute-backends-constraint-transfer.test.js' });
+  window.FrameLabCompute.setMode('cpu');
+  const nodeBuffer = new ArrayBuffer(1024), edgeBuffer = new ArrayBuffer(1024);
+  const nodes = new Float64Array(nodeBuffer, 0, 10);
+  nodes.set([0, 0, 0, 0, 1, 2, 0, 2, 0, 1]);
+  const edges = new Float64Array(edgeBuffer, 0, 4);
+  edges.set([0, 1, 1, 1]);
+  const result = await window.FrameLabCompute.projectConstraints(nodes, edges, 1, { transferOwnership: true });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].message.nodes, nodeBuffer);
+  assert.equal(requests[0].message.edges, edgeBuffer);
+  assert.ok(requests[0].transfer.includes(nodeBuffer) && requests[0].transfer.includes(edgeBuffer));
+  assert.equal(requests[0].message.nodeLength, 10);
+  assert.equal(requests[0].message.edgeLength, 4);
+  assert.equal(result.data.length, 10);
+  assert.equal(result.edges.length, 4);
+  assert.ok(Math.abs(result.data[0] - 0.5) < 1e-9);
+  assert.ok(Math.abs(result.data[5] - 1.5) < 1e-9);
 });
