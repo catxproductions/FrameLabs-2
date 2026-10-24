@@ -1,5 +1,5 @@
 /* Off-main-thread CPU kernels for FrameLab.
-   Handles both the optional utilization report and live body integration. */
+   Handles diagnostics, body integration, structural constraints, and debris contacts. */
 'use strict';
 
 const BODY_STRIDE = 13;
