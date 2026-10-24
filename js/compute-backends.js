@@ -488,7 +488,9 @@
       data: projectConstraintsCPU(nodes, edges, iterations), edges, backend: 'Main-thread CPU fallback'
     });
     const id = ++sequence;
-    const canTransfer = transferOwnership && nodes.byteOffset === 0 && edges.byteOffset === 0;
+    const canTransfer = transferOwnership && nodes.byteOffset === 0 && edges.byteOffset === 0 &&
+      nodes.buffer.byteLength <= nodes.byteLength * 1.25 &&
+      edges.buffer.byteLength <= edges.byteLength * 1.25;
     const nodePayload = canTransfer ? nodes : new Float64Array(nodes);
     const edgePayload = canTransfer ? edges : new Float64Array(edges);
     const nodeLength = nodePayload.length, edgeLength = edgePayload.length;
@@ -631,7 +633,8 @@
       return Promise.resolve({ data: integrateCPU(packed, dt), backend: 'Main-thread CPU fallback' });
     }
     const id = ++sequence;
-    const canTransfer = transferOwnership && packed.byteOffset === 0;
+    const canTransfer = transferOwnership && packed.byteOffset === 0 &&
+      packed.buffer.byteLength <= packed.byteLength * 1.25;
     const payload = canTransfer ? packed : new Float32Array(packed);
     const activeLength = payload.length;
     return new Promise((resolve, reject) => {
@@ -659,7 +662,7 @@
         resolve({ data, backend: message.backend || 'CPU worker physics' });
       }, reject });
       try {
-        if (canTransfer) computeStats.transferredBytes += payload.buffer.byteLength;
+        computeStats.transferredBytes += payload.buffer.byteLength;
         worker.postMessage({
           id, type: 'integrateBodies', dt, length: activeLength, data: payload.buffer
         }, [payload.buffer]);
