@@ -281,9 +281,10 @@ test('actual node and debris motion paths use the compute backend, not only the 
   assert.match(js, /async function integrateMotionBatch\(packed,dt\)/);
   assert.match(js, /async function updateMemberPhysics\(dt\)/);
   assert.match(js, /async function updateDebris\(dt\)/);
-  assert.match(js, /await integrateMotionBatch\(packed,dt\)/);
-  assert.match(js, /await window\.FrameLabCompute\.projectConstraints\(state,new Float64Array\(edgeRows\),QUALITY_PROFILE\.constraintIterations\)/);
-  assert.match(read('js/compute-backends.js'), /worker\.postMessage\(\{ id, type: 'projectConstraints'/);
+  assert.match(js, /await integrateMotionBatch\(packed,dt,'nodeMotionPacked'/);
+  assert.match(js, /await integrateMotionBatch\(packed,dt,'debrisMotionPacked'/);
+  assert.match(js, /await window\.FrameLabCompute\.projectConstraints\(state,edges,QUALITY_PROFILE\.constraintIterations\)/);
+  assert.match(read('js/compute-backends.js'), /worker\.postMessage\(\{\s*id, type: 'projectConstraints'/);
   assert.match(js, /await updateMemberPhysics\(dt\)[\s\S]*await updateDebris\(dt\)/);
   assert.match(js, /async function processPhysicsSteps\(\)/);
   assert.match(read('index.html'), /id="computeMode"/);
@@ -522,4 +523,56 @@ test('wind affects structural demand and uses the sustained-overload failure pat
   assert.match(js, /if\(util>1\)\{sim\.overloadTimers/);
   assert.match(model, /function windMemberDemand\(/);
   assert.match(html, /Sustained severe wind can weaken and break vulnerable members/);
+});
+
+
+test('CPU worker reuses the transferred input buffer and respects its active body length', () => {
+  const workerSource = read('js/compute-worker.js');
+  const replies = [];
+  const self = { postMessage: (message) => replies.push(message) };
+  vm.runInNewContext(workerSource, { self, ArrayBuffer, Float32Array, Math, Number }, { filename: 'compute-worker-buffer-reuse.test.js' });
+  const scratch = new ArrayBuffer(256);
+  const body = new Float32Array(scratch);
+  body.set([1, 2, 1, -2, 2, 10, 0.5, 1, 2, 0.5, 3, 4, 5]);
+  body[13] = 9876;
+  self.onmessage({ data: { id: 91, type: 'integrateBodies', dt: 0.05, data: scratch, length: 13 } });
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].data, scratch, 'worker returns the same transferred buffer instead of allocating a result buffer');
+  assert.equal(replies[0].length, 13, 'caller receives the active view length even when buffer capacity is larger');
+  const result = new Float32Array(replies[0].data);
+  assert.ok(Math.abs(result[0] - 1.055) < 1e-6);
+  assert.equal(result[13], 9876, 'unused scratch capacity is not integrated');
+});
+
+test('performance backend pools GPU buffers, benchmarks crossover sizes, and exposes diagnostics', () => {
+  const backend = read('js/compute-backends.js');
+  const main = read('js/main.js');
+  assert.match(backend, /const gpuBuffers = \{ body: \{\}, scan: \{\} \}/);
+  assert.match(backend, /function ensureGPUBuffer\(/);
+  assert.match(backend, /GPU_BENCHMARK_COUNTS = \[256, 1024, 4096\]/);
+  assert.match(backend, /measurements\.slice\(i\)\.every\(sample => sample\.preferGPU\)/);
+  assert.match(backend, /getDiagnostics: \(\) => \(\{/);
+  assert.match(backend, /setRuntimeStatus\(text\)/);
+  assert.match(backend, /options\.transferOwnership === true/);
+  assert.match(main, /acquireScratchArray\('constraintNodes'/);
+  assert.match(main, /acquireScratchArray\('constraintEdges'/);
+  assert.match(main, /transferOwnership:true/);
+  assert.match(main, /const MAX_PHYSICS_STEPS_PER_FRAME=4/);
+  assert.doesNotMatch(main, /if\(sim\.running&&physicsAccumulator\+1e-9>=DT\)void processPhysicsSteps\(\)/);
+});
+
+test('compute diagnostics remain usable without WebGPU or workers', () => {
+  const source = read('js/compute-backends.js');
+  const window = {};
+  const document = {
+    baseURI: 'https://example.test/framelabs/',
+    currentScript: { src: 'https://example.test/framelabs/js/compute-backends.js' },
+    getElementById: () => null
+  };
+  vm.runInNewContext(source, { window, document, navigator: {}, Float32Array, Float64Array, ArrayBuffer, URL }, { filename: 'compute-backends-diagnostics.test.js' });
+  const diagnostics = window.FrameLabCompute.getDiagnostics();
+  assert.equal(diagnostics.mode, 'auto');
+  assert.equal(diagnostics.autoGPUThreshold, null);
+  assert.equal(diagnostics.gpuState, 'not initialized');
+  assert.equal(diagnostics.bodyBufferCapacityBytes, 0);
 });
