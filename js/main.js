@@ -1575,8 +1575,38 @@ async function updateMemberPhysics(dt){
  for(const node of Object.values(sim.nodes)){if(node.position.y<FLOOR_THICKNESS){node.position.y=FLOOR_THICKNESS;if(node.velocity.y<0)node.velocity.y=0}if(node.referenceLevel===0){node.position.x=node.reference.x;node.position.y=0;node.velocity.x=0;node.velocity.y=0}}
  refreshMemberTopology();calculateStability(lastAnalysis||analyzeStructure());
 }
+function buildDebrisMemberCollisionIndex(){
+ const cellSize=STORY_HEIGHT*1.25,columns=new Map(),floors=new Map();
+ const insert=(grid,link,a,b,padX,padY)=>{
+  const x0=Math.floor((Math.min(a.position.x,b.position.x)-padX)/cellSize),
+   x1=Math.floor((Math.max(a.position.x,b.position.x)+padX)/cellSize),
+   y0=Math.floor((Math.min(a.position.y,b.position.y)-padY)/cellSize),
+   y1=Math.floor((Math.max(a.position.y,b.position.y)+padY)/cellSize);
+  for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++){
+   const key=`${x}:${y}`;let bucket=grid.get(key);
+   if(!bucket){bucket=[];grid.set(key,bucket)}
+   bucket.push(link);
+  }
+ };
+ for(const link of sim.memberLinks){
+  const e=link.e;if(e.failed||e.snapped||e.integrity<=.01)continue;
+  const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
+  if(e.kind==='column')insert(columns,link,a,b,.12,.12);
+  else if(e.kind==='beam'||e.kind==='slab')insert(floors,link,a,b,.12,FLOOR_THICKNESS+.045);
+ }
+ return {cellSize,columns,floors};
+}
+function queryDebrisMemberCollisionLinks(grid,cellSize,left,right,bottom,top){
+ const x0=Math.floor(left/cellSize),x1=Math.floor(right/cellSize),
+  y0=Math.floor(bottom/cellSize),y1=Math.floor(top/cellSize),seen=new Set(),result=[];
+ for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++){
+  const bucket=grid.get(`${x}:${y}`);if(!bucket)continue;
+  for(const link of bucket)if(!seen.has(link)){seen.add(link);result.push(link)}
+ }
+ return result;
+}
 async function updateDebris(dt){
- const activeSimulation=sim;
+ const activeSimulation=sim,collisionIndex=buildDebrisMemberCollisionIndex();
  const motionSnapshots=new Map(),motionBodies=[];
  // Age/remove settled fragments first, then send all live rigid-body force integration
  // to the same CPU-worker/WebGPU kernel used by structural joints.
@@ -1621,7 +1651,8 @@ async function updateDebris(dt){
   let bounds=updateDebrisBounds(d),halfY=(bounds.top-bounds.bottom)*.5,columnContact=null;
   // Side impacts against columns use a swept centre path plus the closest point on the actual segment.
   // This catches slender debris that would otherwise tunnel through a column at high speed.
-  for(const link of sim.memberLinks){const e=link.e;if(e.kind!=='column'||e.failed||e.snapped||e.integrity<=.01||d.sourceId===link.id)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const sx=b.position.x-a.position.x,sy=b.position.y-a.position.y,len=Math.hypot(sx,sy),den=sx*sx+sy*sy;if(len<.001)continue;const tx=sx/len,ty=sy/len,nlx=-ty,nly=tx,minX=Math.min(a.position.x,b.position.x)-d.length*.5-.12,maxX=Math.max(a.position.x,b.position.x)+d.length*.5+.12,minY=Math.min(a.position.y,b.position.y)-d.length*.5-.12,maxY=Math.max(a.position.y,b.position.y)+d.length*.5+.12;if(Math.max(oldX,d.x)<minX||Math.min(oldX,d.x)>maxX||Math.max(oldY,d.y)<minY||Math.min(oldY,d.y)>maxY)continue;
+  const columnPadding=d.length*.5+.12,columnCandidates=queryDebrisMemberCollisionLinks(collisionIndex.columns,collisionIndex.cellSize,Math.min(oldX,d.x)-columnPadding,Math.max(oldX,d.x)+columnPadding,Math.min(oldY,d.y)-columnPadding,Math.max(oldY,d.y)+columnPadding);
+  for(const link of columnCandidates){const e=link.e;if(e.kind!=='column'||e.failed||e.snapped||e.integrity<=.01||d.sourceId===link.id)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const sx=b.position.x-a.position.x,sy=b.position.y-a.position.y,len=Math.hypot(sx,sy),den=sx*sx+sy*sy;if(len<.001)continue;const tx=sx/len,ty=sy/len,nlx=-ty,nly=tx,minX=Math.min(a.position.x,b.position.x)-d.length*.5-.12,maxX=Math.max(a.position.x,b.position.x)+d.length*.5+.12,minY=Math.min(a.position.y,b.position.y)-d.length*.5-.12,maxY=Math.max(a.position.y,b.position.y)+d.length*.5+.12;if(Math.max(oldX,d.x)<minX||Math.min(oldX,d.x)>maxX||Math.max(oldY,d.y)<minY||Math.min(oldY,d.y)>maxY)continue;
    const qT=clamp(((d.x-a.position.x)*sx+(d.y-a.position.y)*sy)/den,0,1),qx=a.position.x+sx*qT,qy=a.position.y+sy*qT;let nx=d.x-qx,ny=d.y-qy,dist=Math.hypot(nx,ny),radius=debrisProjectionRadius(d,nx/(dist||1),ny/(dist||1))+.065,depth=radius-dist,cx=d.x,cy=d.y,t=qT,swept=false;
    if(depth<=0){const oldSide=(oldX-a.position.x)*nlx+(oldY-a.position.y)*nly,newSide=(d.x-a.position.x)*nlx+(d.y-a.position.y)*nly;if(oldSide*newSide>0||Math.abs(oldSide-newSide)<1e-6)continue;const alpha=clamp(oldSide/(oldSide-newSide),0,1);cx=oldX+(d.x-oldX)*alpha;cy=oldY+(d.y-oldY)*alpha;const along=(cx-a.position.x)*tx+(cy-a.position.y)*ty;if(along<-.12||along>len+.12)continue;const side=oldSide>=0?1:-1;nx=nlx*side;ny=nly*side;t=clamp(along/len,0,1);radius=debrisProjectionRadius(d,nx,ny)+.065;depth=radius;dist=0;swept=true;}
    else{nx/=Math.max(1e-6,dist);ny/=Math.max(1e-6,dist)}
@@ -1629,7 +1660,9 @@ async function updateDebris(dt){
   if(columnContact){const c=columnContact,surfaceVx=c.a.velocity.x+(c.b.velocity.x-c.a.velocity.x)*c.t,surfaceVy=c.a.velocity.y+(c.b.velocity.y-c.a.velocity.y)*c.t,preVx=d.vx,preVy=d.vy,rvx=preVx-surfaceVx,rvy=preVy-surfaceVy,vn=rvx*c.nx+rvy*c.ny,closing=Math.max(0,-vn),impactNode={position:{x:c.qx,y:c.qy},velocity:{x:preVx,y:preVy},lastImpactTime:sim.time};if(c.swept){d.x=c.cx+c.nx*(c.radius+.002);d.y=c.cy+c.ny*(c.radius+.002)}else{d.x+=c.nx*(c.depth+.002);d.y+=c.ny*(c.depth+.002)}if(vn<0){const response=getContactResponse(d.material,c.link.e.material,closing),j=-(1+response.restitution)*vn;d.vx+=j*c.nx;d.vy+=j*c.ny;const tx=-c.ny,ty=c.nx,vt=(d.vx-surfaceVx)*tx+(d.vy-surfaceVy)*ty,grip=clamp(response.dynamicFriction*.72,.06,.72);d.vx-=tx*vt*grip;d.vy-=ty*vt*grip;const rx=c.qx-d.x,ry=c.qy-d.y;d.angularVelocity=clamp(d.angularVelocity+(rx*(j*c.ny)-ry*(j*c.nx))/Math.max(.02,d.momentOfInertia),-3,3);if(d.settled&&closing>.65){d.settled=false;d.grounded=false}}
    if(closing>.55)handleMemberImpact(impactNode,c.link,closing,{mass:d.mass,memberIds:new Set(),signature:`debris:${d.id}`});bounds=updateDebrisBounds(d);halfY=(bounds.top-bounds.bottom)*.5;}
   let contact=null;
-  for(const link of sim.memberLinks){
+  const floorSearchLeft=Math.min(oldBounds.left,bounds.left),floorSearchRight=Math.max(oldBounds.right,bounds.right),floorSearchBottom=Math.min(oldBounds.bottom,bounds.bottom)-.045,floorSearchTop=Math.max(oldBounds.top,bounds.top)+.045;
+  const floorCandidates=queryDebrisMemberCollisionLinks(collisionIndex.floors,collisionIndex.cellSize,floorSearchLeft,floorSearchRight,floorSearchBottom,floorSearchTop);
+  for(const link of floorCandidates){
    const e=link.e;if(e.failed||e.snapped||(e.kind!=='beam'&&e.kind!=='slab')||e.integrity<=.01)continue;
    const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
    const left=Math.min(a.position.x,b.position.x),right=Math.max(a.position.x,b.position.x);
