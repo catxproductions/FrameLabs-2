@@ -511,7 +511,7 @@ test('debris collision hot path is routed to optional C++ WebAssembly with JavaS
   const cpp = read('cpp/physics_core.cpp');
   assert.match(main, /await resolveDebrisCollisions\(dt\)/);
   assert.match(main, /FrameLabCompute\?\.resolveDebrisPairs/);
-  assert.match(backend, /async function resolveDebrisPairs\(bodies, pairs, moisture = 0\)/);
+  assert.match(backend, /async function resolveDebrisPairs\(bodies, pairs, moisture = 0, options = \{\}\)/);
   assert.match(worker, /payload\.type === 'resolveDebrisPairs'/);
   assert.match(cpp, /int resolve_debris_pairs\(/);
   assert.match(main, /finishDebrisCollisionFragments\(fragments\)/);
@@ -639,7 +639,7 @@ test('large debris solver can transfer exact input batches without backend copie
 });
 
 
-test('constraint worker transfers reusable scratch buffers and preserves active view lengths', async () => {
+test('constraint worker compacts oversized scratch and supports exact zero-copy transfers', async () => {
   const backendSource = read('js/compute-backends.js');
   const workerSource = read('js/compute-worker.js');
   const status = { textContent: '' };
@@ -675,15 +675,27 @@ test('constraint worker transfers reusable scratch buffers and preserves active 
   edges.set([0, 1, 1, 1]);
   const result = await window.FrameLabCompute.projectConstraints(nodes, edges, 1, { transferOwnership: true });
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].message.nodes, nodeBuffer);
-  assert.equal(requests[0].message.edges, edgeBuffer);
-  assert.ok(requests[0].transfer.includes(nodeBuffer) && requests[0].transfer.includes(edgeBuffer));
+  assert.notEqual(requests[0].message.nodes, nodeBuffer, 'oversized scratch capacity is compacted before transfer');
+  assert.notEqual(requests[0].message.edges, edgeBuffer, 'oversized edge capacity is compacted before transfer');
+  assert.equal(requests[0].message.nodes.byteLength, 80);
+  assert.equal(requests[0].message.edges.byteLength, 32);
+  assert.ok(requests[0].transfer.includes(requests[0].message.nodes) && requests[0].transfer.includes(requests[0].message.edges));
   assert.equal(requests[0].message.nodeLength, 10);
   assert.equal(requests[0].message.edgeLength, 4);
   assert.equal(result.data.length, 10);
   assert.equal(result.edges.length, 4);
   assert.ok(Math.abs(result.data[0] - 0.5) < 1e-9);
   assert.ok(Math.abs(result.data[5] - 1.5) < 1e-9);
+
+  const exactNodes = new Float64Array([0, 0, 0, 0, 1, 2, 0, 2, 0, 1]);
+  const exactEdges = new Float64Array([0, 1, 1, 1]);
+  const exactNodeBuffer = exactNodes.buffer, exactEdgeBuffer = exactEdges.buffer;
+  const exactResult = await window.FrameLabCompute.projectConstraints(exactNodes, exactEdges, 1, { transferOwnership: true });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].message.nodes, exactNodeBuffer, 'exact-sized node buffers transfer without a duplicate');
+  assert.equal(requests[1].message.edges, exactEdgeBuffer, 'exact-sized edge buffers transfer without a duplicate');
+  assert.equal(exactResult.data.length, 10);
+  assert.equal(exactResult.edges.length, 4);
 });
 
 
