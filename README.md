@@ -31,10 +31,11 @@ Start with the [beginner material guide](js/MATERIALS_GUIDE.md). The guide expla
 
 - The **Physics compute** selector offers Auto, CPU worker, WebGPU (with CPU fallback), and main-thread CPU compatibility modes.
 - `js/compute-worker.js` performs live batched semi-implicit integration of structural-node and debris positions, velocities, and angular state off the main thread. It also runs ordered Gauss-Seidel member-length constraint iterations and the follow-up velocity projection, and retains the demand/capacity diagnostic scan.
-- `js/compute-backends.js` exposes the same packed-body integration kernel on CPU and WebGPU. Auto mode uses the CPU worker for small batches and can select WebGPU for batches of 256+ dynamic bodies when the API is available; explicit WebGPU mode attempts the GPU for any non-empty batch and falls back to the CPU worker if initialization or dispatch fails.
-- The WebGPU compute shader processes body integrations in parallel. It copies the updated body state back to JavaScript each physics substep, so GPU/API readback overhead may outweigh the benefit for small simulations. The CPU worker is the recommended default unless GPU mode performs better on the target device.
+- `js/compute-backends.js` routes motion integration to the persistent CPU worker or WebGPU. Auto mode benchmarks 256, 1,024, and 4,096-body batches and enables GPU integration only from a measured crossover where WebGPU is at least 15% faster at that size and all larger tested sizes. It does not assume that an available GPU is always faster.
+- WebGPU state, uniform, and readback buffers are reused across fixed 120 Hz substeps instead of being created and destroyed for each batch. Readback is still required because the authoritative structural solver consumes the updated state on the CPU, so tiny batches can still favor the worker.
+- Motion packing reuses typed-array scratch buffers. The CPU worker returns the same transferred body buffer in place, including a length for the active portion of a larger scratch buffer; this avoids an extra worker-side output allocation. The main-thread path rebuilds state and retries CPU integration if a transferred worker job fails.
 - Force assembly, material/environment calculations, structural analysis and load-path propagation, member-failure rules, and impact damage/fragmentation decisions remain in JavaScript on the CPU. The ordered member-constraint pass runs in the CPU worker, body integration can run in the worker or WebGPU, and larger debris-pair batches can use the C++/WebAssembly contact kernel in that worker. WebGPU currently handles body integration and the demand/capacity scan, not debris collision solving or structural/failure analysis.
-- GPU initialization/dispatch errors degrade to CPU worker and then a main-thread CPU implementation if a worker is unavailable. Worker URLs are resolved relative to the backend script for GitHub Pages subpaths.
+- GPU initialization/dispatch errors degrade to CPU worker and then a main-thread CPU implementation if a worker is unavailable. Over-limit GPU batches fall back to CPU for those batch sizes without permanently disabling smaller GPU batches. Hot-path status updates are coalesced to four per second, and catch-up physics work yields to the next animation frame so the browser gets time to paint and process input. Worker URLs are resolved relative to the backend script for GitHub Pages subpaths.
 
 ## Pre-calculation and replay
 
@@ -77,7 +78,7 @@ GitHub Actions builds and commits the compiled `js/physics-core.wasm` asset to t
 
 ### Before increasing solver quality
 
-Profile the same saved design in small, medium, and large structures with the JavaScript fallback and the WebAssembly kernel. Compare frame time and maximum link stretch, and check that collapse motion still looks plausible. No browser-performance gain is claimed until this is measured on real devices.
+The built-in crossover benchmark uses the same worker/GPU round-trip path that live integration uses, with warm-up and median samples across three batch sizes. It is a useful per-device routing heuristic, not a substitute for profiling real structures. Verify frame time and collision behavior on small, medium, and large saves before making claims about gains from a release build.
 
 
 ### C++ debris-contact computation
