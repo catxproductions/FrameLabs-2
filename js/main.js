@@ -8,7 +8,7 @@ const GRAVITY=9.81,MAX_FALL_SPEED=15,IMPACT_RESTITUTION=.12,IMPACT_TRANSFER_EFFI
 const PHYSICS_MODEL=window.FrameLabPhysicsModel||null;
 const QUALITY_PRESETS={entry:{label:'Entry',pixelRatio:1,maxDebris:90,maxParticles:170,constraintIterations:5,contactShadows:false,atmosphere:false,wetHighlights:false},balanced:{label:'Balanced',pixelRatio:1.5,maxDebris:170,maxParticles:360,constraintIterations:8,contactShadows:true,atmosphere:true,wetHighlights:true},enthusiast:{label:'Enthusiast',pixelRatio:2,maxDebris:280,maxParticles:600,constraintIterations:11,contactShadows:true,atmosphere:true,wetHighlights:true}};
 let MAX_DEBRIS=QUALITY_PRESETS.balanced.maxDebris,MAX_ATMOSPHERIC_PARTICLES=QUALITY_PRESETS.balanced.maxParticles,QUALITY_PROFILE=QUALITY_PRESETS.balanced,qualityMode='auto',showSimulationOverlays=true,gravityTether=null;
-const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1,windTime:0};
+const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1};
 // These settings tune appearance only. Heat, fuel consumption, ignition, and
 // material damage remain governed by the simulation model.
 const EFFECT_SETTINGS={fireRealism:.80,fireDensity:1,fireSize:1,dustRealism:.72,dustDensity:1,dustSize:1,smokeRealism:.78,smokeDensity:1,smokeSize:1};
@@ -197,7 +197,7 @@ async function runPrecalculation(){
   setReplayStatus(`Pre-calculating 0.00 / ${(limit*DT).toFixed(2)} seconds…`);
   for(let i=1;i<=limit;i++){
    if(precalcCancelRequested||bakeId!==replayBakeId)break;
-   ENVIRONMENT.windTime+=DT;await stepPhysics(DT);completed=i;
+   await stepPhysics(DT);completed=i;
    if(i%replayConfig.checkpointSteps===0||i===limit||!sim.running){
     const checkpoint=captureReplayState(),bytes=replayStateBytes(checkpoint);
     if(usedBytes+bytes>replayConfig.maxBytes){memoryLimited=true;break}
