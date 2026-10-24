@@ -109,7 +109,7 @@ __attribute__((visibility("default"))) int integrate_bodies(uint32_t data_ptr, u
 }
 
 
-// Debris body layout (17 Float64 values):
+// Debris body layout (19 Float64 values):
 // x,y,vx,vy,angle,omega,length,thickness,mass,settled,durability,integrity,
 // fragmentDepth,staticFriction,dynamicFriction,restitution,wetSensitivity,cos(angle),sin(angle).
 // Each candidate pair is two uint32 indexes. Each event is
