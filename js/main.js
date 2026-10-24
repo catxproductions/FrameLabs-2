@@ -22,7 +22,14 @@ function acquireScratchArray(key,Type,length){
  return new Type(buffer,0,length);
 }
 function retainScratchBuffer(key,input,output){
- const buffer=input?.buffer?.byteLength?input.buffer:output?.buffer?.byteLength?output.buffer:null;
+ const inputBuffer=input?.buffer?.byteLength?input.buffer:null;
+ const outputBuffer=output?.buffer?.byteLength?output.buffer:null;
+ let buffer=inputBuffer||outputBuffer;
+ // If a live set shrinks far below a retained power-of-two buffer, prefer the
+ // smaller returned worker buffer. Otherwise transfers would repeatedly ship
+ // unused scratch capacity. Growth is still amortized and small count changes
+ // continue to reuse the larger buffer.
+ if(inputBuffer&&outputBuffer&&inputBuffer!==outputBuffer&&output?.byteLength>0&&inputBuffer.byteLength>output.byteLength*1.25)buffer=outputBuffer;
  if(buffer)PHYSICS_SCRATCH_BUFFERS[key]=buffer;
 }
 function windSpeedRatio(){return clamp((Number(ENVIRONMENT.windSpeed)||0)/100,0,1)}
