@@ -1649,7 +1649,7 @@ async function resolveDebrisCollisions(dt){
  const wasmPairIndices=[],indexById=new Map(live.map((d,i)=>[d.id,i]));
  for(const pairKey of pairs){
   const ids=pairKey.split(':').map(Number),idA=ids[0],idB=ids[1],ia=indexById.get(idA),ib=indexById.get(idB),a=debrisById.get(idA),b=debrisById.get(idB);
-  if(!a||!b||ia==null||ib==null||(a.settled&&b.settled))continue;
+  if(!a||!b||ia==null||ib==null)continue;
   wasmPairIndices.push(ia,ib);
  }
  // Worker transfer overhead only pays off for a substantial collision batch.
