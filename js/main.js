@@ -406,7 +406,7 @@ function cantileverUtilizationAtNode(node){
  }
  return found?worst:null;
 }
-function beamComponentHasSupport(startX,y){const seen=new Set(),queue=[startX];while(queue.length){const node=queue.shift();if(seen.has(node))continue;seen.add(node);if(node>=0&&node<=NX&&columnStacked(node,y))return true;for(const bx of [node-1,node]){if(bx<0||bx>=NX)continue;const beam=BuildingMap.beams[keyOf(bx,y)];if(beam&&hasBeam(bx,y)){const next=bx===node?bx+1:bx;if(!seen.has(next))queue.push(next)}}}return false}
+function beamComponentHasSupport(startX,y){const seen=new Set(),queue=[startX];for(let head=0;head<queue.length;head++){const node=queue[head];if(seen.has(node))continue;seen.add(node);if(node>=0&&node<=NX&&columnStacked(node,y))return true;for(const bx of [node-1,node]){if(bx<0||bx>=NX)continue;const beam=BuildingMap.beams[keyOf(bx,y)];if(beam&&hasBeam(bx,y)){const next=bx===node?bx+1:bx;if(!seen.has(next))queue.push(next)}}}return false}
 function baySupported(x,y){const direct=columnStacked(x,y)&&columnStacked(x+1,y);if(direct)return true;const beam=BuildingMap.beams[keyOf(x,y)];if(!beam||!hasBeam(x,y))return false;return beamComponentHasSupport(x,y)||beamComponentHasSupport(x+1,y)}
 // Estimate the clear span between surviving support paths along a continuous beam line.
 function beamSpanInfo(x,y){let left=x,right=x+1,steps=0;while(left>0&&!columnStacked(left,y)&&hasBeam(left-1,y)&&steps++<=NX)left--;steps=0;while(right<NX&&!columnStacked(right,y)&&hasBeam(right,y)&&steps++<=NX)right++;const leftSupported=columnStacked(left,y),rightSupported=columnStacked(right,y);return {left,right,bays:Math.max(1,right-left),leftSupported,rightSupported,center:(left+right)*.5,y,supportMode:leftSupported&&rightSupported?'two-sided':leftSupported?'cantilever-right':rightSupported?'cantilever-left':'floating'}}
@@ -458,9 +458,9 @@ function updateNodeAnchors(){
  const nodes=sim.nodes,adj=Object.create(null);for(const key of Object.keys(nodes))adj[key]=[];
  for(const link of sim.memberLinks){if(linkTransfersSupport(link)){adj[link.nodeA].push(link.nodeB);adj[link.nodeB].push(link.nodeA)}}
  const queue=[];for(const [key,node] of Object.entries(nodes)){node.isGroundConnected=false;node.isFreefalling=true;node.floatingClusterId=null;if(node.referenceLevel===0){node.isGroundConnected=true;queue.push(key)}}
- while(queue.length){const key=queue.shift();for(const next of adj[key]||[]){if(nodes[next]&&!nodes[next].isGroundConnected){nodes[next].isGroundConnected=true;queue.push(next)}}}
+ for(let head=0;head<queue.length;head++){const key=queue[head];for(const next of adj[key]||[]){if(nodes[next]&&!nodes[next].isGroundConnected){nodes[next].isGroundConnected=true;queue.push(next)}}}
  const visited=new Set(),clusters=[];
- for(const start of Object.keys(nodes)){if(visited.has(start))continue;const nodeKeys=[],q=[start];visited.add(start);let grounded=false;while(q.length){const key=q.shift(),n=nodes[key];nodeKeys.push(key);grounded=grounded||!!n.isGroundConnected;for(const next of adj[key]||[])if(!visited.has(next)){visited.add(next);q.push(next)}}const id=`cluster:${start}`;for(const key of nodeKeys){nodes[key].floatingClusterId=id;nodes[key].isFreefalling=!grounded}clusters.push({id,nodeKeys:new Set(nodeKeys),grounded,isFloating:!grounded,mass:nodeKeys.reduce((sum,key)=>sum+Math.max(.01,nodes[key].mass||.01),0)});}
+ for(const start of Object.keys(nodes)){if(visited.has(start))continue;const nodeKeys=[],q=[start];visited.add(start);let grounded=false;for(let head=0;head<q.length;head++){const key=q[head],n=nodes[key];nodeKeys.push(key);grounded=grounded||!!n.isGroundConnected;for(const next of adj[key]||[])if(!visited.has(next)){visited.add(next);q.push(next)}}const id=`cluster:${start}`;for(const key of nodeKeys){nodes[key].floatingClusterId=id;nodes[key].isFreefalling=!grounded}clusters.push({id,nodeKeys:new Set(nodeKeys),grounded,isFloating:!grounded,mass:nodeKeys.reduce((sum,key)=>sum+Math.max(.01,nodes[key].mass||.01),0)});}
  sim.floatingClusters=clusters.filter(c=>c.isFloating);
  for(const link of sim.memberLinks){const e=link.e,a=nodes[link.nodeA],b=nodes[link.nodeB];if(!a||!b)continue;e.clusterId=a.floatingClusterId===b.floatingClusterId?a.floatingClusterId:null;e.isFreefalling=!a.isGroundConnected&&!b.isGroundConnected&&!e.failed;e.state=e.failed?(e.shattered?'SHATTERED':'FAILED'):e.snapped?'SNAPPED':e.isFreefalling?'FLOATING':(e.utilization||0)>1?'OVERLOADED':'SUPPORTED';}
  for(let level=0;level<=NY;level++){
@@ -666,7 +666,7 @@ function analyzeStructure(){
  const activeBeam=(x,y)=>activeMember('beams',keyOf(x,y));
  const beamPath=(startX,level)=>{
   const q=[{x:startX,path:[]}],seen=new Set([startX]),recipients=[];
-  while(q.length){const cur=q.shift(),col=activeColumn(cur.x,level-1);if(col&&cur.path.length>0||col&&cur.x!==startX)recipients.push({x:cur.x,col,path:cur.path});
+  for(let head=0;head<q.length;head++){const cur=q[head],col=activeColumn(cur.x,level-1);if(col&&cur.path.length>0||col&&cur.x!==startX)recipients.push({x:cur.x,col,path:cur.path});
    for(const bx of [cur.x-1,cur.x]){if(bx<0||bx>=NX)continue;const beam=activeBeam(bx,level);if(!beam)continue;const nx=bx===cur.x?cur.x+1:cur.x-1;if(seen.has(nx))continue;seen.add(nx);q.push({x:nx,path:[...cur.path,bx]})}
   }
   return recipients;
@@ -738,7 +738,7 @@ function calculateStability(analysis){
  const nodes=sim.nodes||Object.create(null),links=sim.memberLinks||[],nodeKeys=Object.keys(nodes),adj=Object.create(null),nodeAssembly=Object.create(null),components=[];
  for(const key of nodeKeys)adj[key]=[];
  for(const link of links){if(!linkTransfersSupport(link))continue;adj[link.nodeA]?.push(link.nodeB);adj[link.nodeB]?.push(link.nodeA)}
- for(const start of nodeKeys){if(nodeAssembly[start])continue;const keys=[],queue=[start],id=`asm:${start}`;nodeAssembly[start]=id;while(queue.length){const key=queue.shift();keys.push(key);for(const next of adj[key]||[])if(!nodeAssembly[next]){nodeAssembly[next]=id;queue.push(next)}}components.push({id,nodeKeys:new Set(keys),members:[],memberIds:new Set(),mass:0,weightedX:0,weightedY:0,supportPoints:[]})}
+ for(const start of nodeKeys){if(nodeAssembly[start])continue;const keys=[],queue=[start],id=`asm:${start}`;nodeAssembly[start]=id;for(let head=0;head<queue.length;head++){const key=queue[head];keys.push(key);for(const next of adj[key]||[])if(!nodeAssembly[next]){nodeAssembly[next]=id;queue.push(next)}}components.push({id,nodeKeys:new Set(keys),members:[],memberIds:new Set(),mass:0,weightedX:0,weightedY:0,supportPoints:[]})}
  const byId=Object.create(null);for(const c of components)byId[c.id]=c;
  const addMass=(c,m,x,y)=>{if(!c||!Number.isFinite(m)||m<=0)return;c.mass+=m;c.weightedX+=m*x;c.weightedY+=m*y};
  // Each member's mass is assigned to the connected assembly at its intact end(s).
@@ -1334,7 +1334,7 @@ function physicalComponent(nodeKey){
  const adjacency=Object.create(null);for(const key of Object.keys(sim.nodes))adjacency[key]=[];
  // Only unsevered joints transfer component mass. A member with one open end is a local hinge, not a support path.
  for(const link of sim.memberLinks){if(!linkTransfersSupport(link))continue;adjacency[link.nodeA].push({node:link.nodeB,link});adjacency[link.nodeB].push({node:link.nodeA,link})}
- const seenNodes=new Set([nodeKey]),memberIds=new Set(),queue=[nodeKey];while(queue.length){const key=queue.shift();for(const edge of adjacency[key]||[]){memberIds.add(edge.link.id);if(!seenNodes.has(edge.node)){seenNodes.add(edge.node);queue.push(edge.node)}}}
+ const seenNodes=new Set([nodeKey]),memberIds=new Set(),queue=[nodeKey];for(let head=0;head<queue.length;head++){const key=queue[head];for(const edge of adjacency[key]||[]){memberIds.add(edge.link.id);if(!seenNodes.has(edge.node)){seenNodes.add(edge.node);queue.push(edge.node)}}}
  // A one-ended member contributes its own mass to the component on its still-attached side.
  for(const link of sim.memberLinks){if(link.e.failed||link.e.integrity<=0)continue;if(!link.connectionA.broken&&seenNodes.has(link.nodeA))memberIds.add(link.id);if(!link.connectionB.broken&&seenNodes.has(link.nodeB))memberIds.add(link.id)}
  let mass=0;for(const link of sim.memberLinks)if(memberIds.has(link.id))mass+=Math.max(.01,link.e.mass);for(const load of Object.values(BuildingMap.loads)){if(seenNodes.has(keyOf(load.x,load.y))||seenNodes.has(keyOf(load.x+1,load.y)))mass+=load.mass}
