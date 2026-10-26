@@ -91,3 +91,34 @@ test('structural wind demand is speed-squared, gust-aware, and exposure/height d
   assert.ok(severeWindColumn < materials.steel.column.capacity, 'the same wind load alone remains below built-in steel column capacity');
   assert.ok(Number.isFinite(model.windMemberDemand({ speedKph: 1000, height: 5, exposure: 9, kind: 'unknown' })), 'unexpected inputs remain bounded');
 });
+
+
+test('component mass properties calculate COM and inertia about COM and a support pivot', () => {
+  const model = loadModel();
+  const elements = [
+    { mass: 1, x: 0, y: 0 },
+    { mass: 1, x: 2, y: 0 }
+  ];
+  const com = model.calculateMassProperties2D(elements);
+  assert.equal(com.mass, 2);
+  assert.equal(com.comX, 1);
+  assert.equal(com.comY, 0);
+  assert.equal(com.inertiaAboutCOM, 2);
+  assert.equal(com.inertiaAboutPivot, 2, 'without a pivot, inertia is reported about the COM');
+
+  const supported = model.calculateMassProperties2D(elements, { x: 0, y: 0 });
+  assert.equal(supported.inertiaAboutPivot, 4, 'parallel-axis term is included for support-pivot rotation');
+
+  const member = model.calculateMassProperties2D([
+    { mass: 3, x: 1, y: 2, intrinsicInertia: 4 }
+  ]);
+  assert.equal(member.inertiaAboutCOM, 4, 'a member contributes its own centroidal inertia');
+
+  const invalid = model.calculateMassProperties2D([
+    { mass: -4, x: 0, y: 0 },
+    { mass: 2, x: Infinity, y: 0 },
+    { mass: 0, x: 1, y: 1 }
+  ]);
+  assert.equal(invalid.mass, 0, 'invalid or non-positive mass samples are ignored');
+  assert.equal(invalid.inertiaAboutCOM, 0);
+});
