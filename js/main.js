@@ -738,19 +738,19 @@ function calculateStability(analysis){
  const nodes=sim.nodes||Object.create(null),links=sim.memberLinks||[],nodeKeys=Object.keys(nodes),adj=Object.create(null),nodeAssembly=Object.create(null),components=[];
  for(const key of nodeKeys)adj[key]=[];
  for(const link of links){if(!linkTransfersSupport(link))continue;adj[link.nodeA]?.push(link.nodeB);adj[link.nodeB]?.push(link.nodeA)}
- for(const start of nodeKeys){if(nodeAssembly[start])continue;const keys=[],queue=[start],id=`asm:${start}`;nodeAssembly[start]=id;for(let head=0;head<queue.length;head++){const key=queue[head];keys.push(key);for(const next of adj[key]||[])if(!nodeAssembly[next]){nodeAssembly[next]=id;queue.push(next)}}components.push({id,nodeKeys:new Set(keys),members:[],memberIds:new Set(),mass:0,weightedX:0,weightedY:0,supportPoints:[]})}
+ for(const start of nodeKeys){if(nodeAssembly[start])continue;const keys=[],queue=[start],id=`asm:${start}`;nodeAssembly[start]=id;for(let head=0;head<queue.length;head++){const key=queue[head];keys.push(key);for(const next of adj[key]||[])if(!nodeAssembly[next]){nodeAssembly[next]=id;queue.push(next)}}components.push({id,nodeKeys:new Set(keys),members:[],memberIds:new Set(),mass:0,weightedX:0,weightedY:0,massElements:[],supportPoints:[]})}
  const byId=Object.create(null);for(const c of components)byId[c.id]=c;
- const addMass=(c,m,x,y)=>{if(!c||!Number.isFinite(m)||m<=0)return;c.mass+=m;c.weightedX+=m*x;c.weightedY+=m*y};
+ const addMass=(c,m,x,y,intrinsicInertia=0)=>{if(!c||!Number.isFinite(m)||m<=0||!Number.isFinite(x)||!Number.isFinite(y))return;c.mass+=m;c.weightedX+=m*x;c.weightedY+=m*y;c.massElements.push({mass:m,x,y,intrinsicInertia:Math.max(0,Number(intrinsicInertia)||0)})};
  // Each member's mass is assigned to the connected assembly at its intact end(s).
- for(const link of links){const e=link.e;if(e.failed||e.integrity<=.02)continue;const aId=nodeAssembly[link.nodeA],bId=nodeAssembly[link.nodeB],aAlive=!link.connectionA.broken,bAlive=!link.connectionB.broken,a=nodes[link.nodeA],b=nodes[link.nodeB];if(!a||!b)continue;const m=Math.max(.01,e.mass);if(e.snapped){const ca=byId[aId],cb=byId[bId];if(ca)addMass(ca,m*(ca===cb?1:.5),a.position.x,a.position.y);if(cb&&cb!==ca)addMass(cb,m*.5,b.position.x,b.position.y);continue}let target=null;if(aAlive&&bAlive&&aId===bId)target=byId[aId];else if(aAlive)target=byId[aId];else if(bAlive)target=byId[bId];if(!target)continue;addMass(target,m,(a.position.x+b.position.x)*.5,(a.position.y+b.position.y)*.5);target.members.push(link);target.memberIds.add(link.id)}
+ for(const link of links){const e=link.e;if(e.failed||e.integrity<=.02)continue;const aId=nodeAssembly[link.nodeA],bId=nodeAssembly[link.nodeB],aAlive=!link.connectionA.broken,bAlive=!link.connectionB.broken,a=nodes[link.nodeA],b=nodes[link.nodeB];if(!a||!b)continue;const m=Math.max(.01,e.mass);if(e.snapped){const ca=byId[aId],cb=byId[bId];if(ca)addMass(ca,m*(ca===cb?1:.5),a.position.x,a.position.y);if(cb&&cb!==ca)addMass(cb,m*.5,b.position.x,b.position.y);continue}let target=null;if(aAlive&&bAlive&&aId===bId)target=byId[aId];else if(aAlive)target=byId[aId];else if(bAlive)target=byId[bId];if(!target)continue;const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y,centroidX=(a.position.x+b.position.x)*.5,centroidY=(a.position.y+b.position.y)*.5;addMass(target,m,centroidX,centroidY,m*(dx*dx+dy*dy)/12);target.members.push(link);target.memberIds.add(link.id)}
  // Loads contribute at their actual bay centre, split between disconnected endpoint assemblies when needed.
- for(const load of Object.values(BuildingMap.loads)){if(load.failed||load.integrity<=.02)continue;const a=nodes[keyOf(load.x,load.y)],b=nodes[keyOf(load.x+1,load.y)];if(!a&&!b)continue;const aId=a?nodeAssembly[a.key]:null,bId=b?nodeAssembly[b.key]:null,ca=aId?byId[aId]:null,cb=bId?byId[bId]:null,m=Math.max(.01,load.mass);if(ca&&ca===cb)addMass(ca,m,(a.position.x+b.position.x)*.5,(a.position.y+b.position.y)*.5);else if(ca&&cb){addMass(ca,m*.5,a.position.x,a.position.y);addMass(cb,m*.5,b.position.x,b.position.y)}else if(ca)addMass(ca,m,(a.position.x+(b?.position.x??a.position.x))*.5,(a.position.y+(b?.position.y??a.position.y))*.5);else if(cb)addMass(cb,m,((a?.position.x??b.position.x)+b.position.x)*.5,((a?.position.y??b.position.y)+b.position.y)*.5)}
+ for(const load of Object.values(BuildingMap.loads)){if(load.failed||load.integrity<=.02)continue;const a=nodes[keyOf(load.x,load.y)],b=nodes[keyOf(load.x+1,load.y)];if(!a&&!b)continue;const aId=a?nodeAssembly[a.key]:null,bId=b?nodeAssembly[b.key]:null,ca=aId?byId[aId]:null,cb=bId?byId[bId]:null,m=Math.max(.01,load.mass);if(ca&&ca===cb)addMass(ca,m,(a.position.x+b.position.x)*.5,(a.position.y+b.position.y)*.5,m*STORY_HEIGHT*STORY_HEIGHT/12);else if(ca&&cb){addMass(ca,m*.5,a.position.x,a.position.y);addMass(cb,m*.5,b.position.x,b.position.y)}else if(ca)addMass(ca,m,(a.position.x+(b?.position.x??a.position.x))*.5,(a.position.y+(b?.position.y??a.position.y))*.5);else if(cb)addMass(cb,m,((a?.position.x??b.position.x)+b.position.x)*.5,((a?.position.y??b.position.y)+b.position.y)*.5)}
  // Only an intact base column with both end joints intact counts as a foundation contact.
  for(const link of links){const e=link.e;if(e.kind!=='column'||e.y!==0||e.failed||e.integrity<=.02||link.connectionA.broken||link.connectionB.broken)continue;const c=byId[nodeAssembly[link.nodeB]],base=nodes[link.nodeA];if(c&&base)c.supportPoints.push({x:base.position.x,capacity:Math.max(.01,e.capacity*e.integrity),memberId:link.id})}
  const previous=sim.assemblyDynamics||Object.create(null),nextDynamics=Object.create(null),assemblies=[];
  for(const c of components){
   if(c.mass<=.001){for(const key of c.nodeKeys){const n=nodes[key];if(n)addMass(c,Math.max(.005,n.mass||.005),n.position.x,n.position.y)}}
-  c.comX=c.mass?c.weightedX/c.mass:0;c.comY=c.mass?c.weightedY/c.mass:0;c.totalMass=Math.max(.01,c.mass);c.supportPoints=c.supportPoints.filter((p,i,arr)=>arr.findIndex(q=>Math.abs(q.x-p.x)<.01)===i).sort((a,b)=>a.x-b.x);
+  const massProperties=PHYSICS_MODEL?.calculateMassProperties2D?.(c.massElements||[])||null;c.comX=massProperties?.comX??(c.mass?c.weightedX/c.mass:0);c.comY=massProperties?.comY??(c.mass?c.weightedY/c.mass:0);c.totalMass=Math.max(.01,massProperties?.mass??c.mass);c.supportPoints=c.supportPoints.filter((p,i,arr)=>arr.findIndex(q=>Math.abs(q.x-p.x)<.01)===i).sort((a,b)=>a.x-b.x);
   c.minSupportX=c.supportPoints.length?Math.min(...c.supportPoints.map(p=>p.x)):null;c.maxSupportX=c.supportPoints.length?Math.max(...c.supportPoints.map(p=>p.x)):null;
   c.withinBase=isCoMWithinBase(c.comX,c.supportPoints);c.outside=c.supportPoints.length===0||!c.withinBase;c.isFloating=c.supportPoints.length===0&&c.members.length>0&&[...c.nodeKeys].some(key=>!nodes[key]?.isGroundConnected);
   c.supportCentroid=c.supportPoints.length?c.supportPoints.reduce((sum,p)=>sum+p.x*p.capacity,0)/c.supportPoints.reduce((sum,p)=>sum+p.capacity,0):c.comX;
@@ -760,8 +760,8 @@ function calculateStability(analysis){
   c.marginWorld=c.supportPoints.length>1?Math.min(c.comX-c.minSupportX,c.maxSupportX-c.comX):c.supportPoints.length===1?STORY_HEIGHT*.5-Math.abs(c.comX-c.supportPoints[0].x):0;
   c.stabilityMetric=c.supportPoints.length>1?clamp((2*c.marginWorld/Math.max(.01,c.maxSupportX-c.minSupportX))*100,0,100):c.supportPoints.length===1?clamp((1-Math.abs(c.comX-c.supportPoints[0].x)/(STORY_HEIGHT*.5))*100,0,100):0;
   // Moment of inertia uses member and load masses already accumulated into the assembly CoM.
-  let inertia=0;for(const link of c.members){const a=nodes[link.nodeA],b=nodes[link.nodeB];if(!a||!b)continue;const x=(a.position.x+b.position.x)*.5,y=(a.position.y+b.position.y)*.5;inertia+=Math.max(.01,link.e.mass)*((x-c.pivotX)**2+(y-c.pivotY)**2)}for(const key of c.nodeKeys){const n=nodes[key];if(n&&n.mass>0)inertia+=Math.min(.08,n.mass)*((n.position.x-c.pivotX)**2+n.position.y**2)}c.momentOfInertia=Math.max(.25,inertia);
-  c.key=`${[...c.nodeKeys].sort().join('|')}`;let dyn=previous[c.key];if(!dyn){let overlapBest=0;for(const old of Object.values(previous)){const oldKeys=old.nodeKeys instanceof Set?old.nodeKeys:new Set(old.nodeKeys||[]);let overlap=0;for(const k of c.nodeKeys)if(oldKeys.has(k))overlap++;if(overlap>overlapBest){overlapBest=overlap;dyn=old}}}dyn={rotation:Number(dyn?.rotation)||0,angularVelocity:Number(dyn?.angularVelocity)||0,angularAcceleration:Number(dyn?.angularAcceleration)||0,torque:Number(dyn?.torque)||0,isRotating:!!dyn?.isRotating,pivotX:c.pivotX,pivotY:0,momentOfInertia:c.momentOfInertia,nodeKeys:new Set(c.nodeKeys)};dyn.pivotX=c.pivotX;dyn.pivotY=0;dyn.momentOfInertia=c.momentOfInertia;c.dynamics=dyn;if(!c.shouldTip&&Math.abs(dyn.rotation)>.01)c.tippingDirection=dyn.rotation<0?'right':'left';nextDynamics[c.key]=dyn;for(const key of c.nodeKeys)nodeAssembly[key]=c.key;c.id=c.key;assemblies.push(c);byId[c.key]=c;
+  const pivotProperties=PHYSICS_MODEL?.calculateMassProperties2D?.(c.massElements||[],{x:c.pivotX,y:c.pivotY})||massProperties;c.momentOfInertiaCOM=Math.max(.25,Number(pivotProperties?.inertiaAboutCOM)||0);const parallelAxisFallback=c.momentOfInertiaCOM+c.totalMass*((c.comX-c.pivotX)**2+(c.comY-c.pivotY)**2);c.momentOfInertia=Math.max(.25,Number(pivotProperties?.inertiaAboutPivot)||parallelAxisFallback);
+  c.key=`${[...c.nodeKeys].sort().join('|')}`;let dyn=previous[c.key];if(!dyn){let overlapBest=0;for(const old of Object.values(previous)){const oldKeys=old.nodeKeys instanceof Set?old.nodeKeys:new Set(old.nodeKeys||[]);let overlap=0;for(const k of c.nodeKeys)if(oldKeys.has(k))overlap++;if(overlap>overlapBest){overlapBest=overlap;dyn=old}}}dyn={rotation:Number(dyn?.rotation)||0,angularVelocity:Number(dyn?.angularVelocity)||0,angularAcceleration:Number(dyn?.angularAcceleration)||0,torque:Number(dyn?.torque)||0,isRotating:!!dyn?.isRotating,pivotX:c.pivotX,pivotY:0,momentOfInertiaCOM:c.momentOfInertiaCOM,momentOfInertia:c.momentOfInertia,nodeKeys:new Set(c.nodeKeys)};dyn.pivotX=c.pivotX;dyn.pivotY=0;dyn.momentOfInertiaCOM=c.momentOfInertiaCOM;dyn.momentOfInertia=c.momentOfInertia;c.dynamics=dyn;if(!c.shouldTip&&Math.abs(dyn.rotation)>.01)c.tippingDirection=dyn.rotation<0?'right':'left';nextDynamics[c.key]=dyn;for(const key of c.nodeKeys)nodeAssembly[key]=c.key;c.id=c.key;assemblies.push(c);byId[c.key]=c;
  }
  sim.assemblyDynamics=nextDynamics;sim.stability={assemblies,primary:null,nodeAssembly,byId};
  const eligible=assemblies.filter(c=>c.members.length||c.supportPoints.length).sort((a,b)=>{const ar=a.supportPoints.length?1:0,br=b.supportPoints.length?1:0;if(ar!==br)return br-ar;return b.totalMass-a.totalMass});
@@ -773,7 +773,7 @@ function calculateStability(analysis){
  }
 }
 function calculateCollapseDynamics(assembly,dt){
- const dyn=assembly.dynamics;if(!dyn)return;dyn.pivotX=assembly.pivotX;dyn.pivotY=0;dyn.momentOfInertia=assembly.momentOfInertia;
+ const dyn=assembly.dynamics;if(!dyn)return;dyn.pivotX=assembly.pivotX;dyn.pivotY=0;dyn.momentOfInertiaCOM=assembly.momentOfInertiaCOM;dyn.momentOfInertia=assembly.momentOfInertia;
  if(assembly.shouldTip){const leverArm=assembly.comX-assembly.pivotX;dyn.torque=-leverArm*assembly.totalMass*GRAVITY;dyn.angularAcceleration=clamp(dyn.torque/Math.max(.25,dyn.momentOfInertia),-4,4);dyn.isRotating=true;}
  else{dyn.torque=0;dyn.angularAcceleration=0;dyn.angularVelocity*=Math.exp(-ROTATION_DAMPING*dt);if(Math.abs(dyn.angularVelocity)<.008&&Math.abs(dyn.rotation)<.006){dyn.angularVelocity=0;dyn.rotation=0;dyn.isRotating=false}}
  dyn.angularVelocity=clamp(dyn.angularVelocity+dyn.angularAcceleration*dt,-2.8,2.8);dyn.rotation+=dyn.angularVelocity*dt;
@@ -1352,6 +1352,27 @@ function applyTargetImpulse(link,hitPoint,vx,vy,sourceMass){
  // is strength, not inertia; using it as mass previously made strong members unrealistically immovable.
  const scale=IMPACT_MOMENTUM_TRANSFER*IMPACT_TRANSFER_EFFICIENCY;
  const impulseX=Math.max(0,sourceMass)*vx*scale,impulseY=Math.max(0,sourceMass)*vy*scale;
+ // Apply the angular part of the impulse at the actual contact point. The
+ // current assembly pivot is used for rotational response; its inertia includes
+ // the COM offset through the parallel-axis theorem. Endpoint velocity changes
+ // below remain available to the deformable node/constraint simulation.
+ const assemblyId=sim.stability?.nodeAssembly?.[link.nodeA];
+ if(assemblyId&&assemblyId===sim.stability?.nodeAssembly?.[link.nodeB]){
+  const assembly=sim.stability?.byId?.[assemblyId],dyn=assembly?.dynamics;
+  if(assembly&&dyn){
+   const pivotX=Number.isFinite(assembly.pivotX)?assembly.pivotX:assembly.comX;
+   const pivotY=Number.isFinite(assembly.pivotY)?assembly.pivotY:assembly.comY;
+   const angularImpulse=(hitPoint.x-pivotX)*impulseY-(hitPoint.y-pivotY)*impulseX;
+   const inertia=Math.max(.25,Number(assembly.momentOfInertia)||.25);
+   // End-node velocity transfer also captures local bending; use a conservative
+   // share here to avoid counting all of that response twice.
+   const deltaOmega=angularImpulse/inertia*.35;
+   if(Number.isFinite(deltaOmega)&&Math.abs(deltaOmega)>1e-8){
+    dyn.angularVelocity=clamp((Number(dyn.angularVelocity)||0)+deltaOmega,-2.8,2.8);
+    dyn.isRotating=true;
+   }
+  }
+ }
  let dvax=0,dvay=0,dvbx=0,dvby=0;
  if(a.referenceLevel>0){const mA=Math.max(.06,a.mass||.06);dvax=clamp(impulseX*(1-t)/mA,-2.2,2.2);dvay=clamp(impulseY*(1-t)/mA,-2.2,2.2);a.velocity.x=clamp(a.velocity.x+dvax,-5,5);a.velocity.y=clamp(a.velocity.y+dvay,-MAX_FALL_SPEED,MAX_FALL_SPEED)}
  if(b.referenceLevel>0){const mB=Math.max(.06,b.mass||.06);dvbx=clamp(impulseX*t/mB,-2.2,2.2);dvby=clamp(impulseY*t/mB,-2.2,2.2);b.velocity.x=clamp(b.velocity.x+dvbx,-5,5);b.velocity.y=clamp(b.velocity.y+dvby,-MAX_FALL_SPEED,MAX_FALL_SPEED)}
@@ -1582,10 +1603,11 @@ async function updateMemberPhysics(dt){
   node.acceleration.x=-.22*node.velocity.x+windAx+(snapForces[node.key]||0)-mediumDrag*node.velocity.x+clamp(tetherForce.x/Math.max(.12,node.mass),-18,18);
   node.acceleration.y=(directVerticalSupport?0:-GRAVITY*cantileverGravity)+nodeBuoyancy-mediumDrag*node.velocity.y-(sagVertical[node.key]||0)+clamp(tetherForce.y/Math.max(.12,node.mass),-18,18);
   if(rotating){
-   // Angular acceleration about the surviving pivot contributes tangential acceleration to each joint.
+   // Angular acceleration creates tangential motion; angular velocity adds
+   // centripetal acceleration so impact torque also produces visible rotation.
    const rx=node.position.x-dyn.pivotX,ry=node.position.y-dyn.pivotY;
-   node.acceleration.x+=-dyn.angularAcceleration*ry;
-   node.acceleration.y+=dyn.angularAcceleration*rx;
+   node.acceleration.x+=-dyn.angularAcceleration*ry-dyn.angularVelocity*dyn.angularVelocity*rx;
+   node.acceleration.y+=dyn.angularAcceleration*rx-dyn.angularVelocity*dyn.angularVelocity*ry;
   }
   motionNodes.push({node,pinned:false,ax:node.acceleration.x,ay:node.acceleration.y,alpha:0,damping:1,maxVX:5,maxVY:MAX_FALL_SPEED,maxOmega:3.4});
  }
