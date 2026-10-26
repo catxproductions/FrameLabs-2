@@ -77,6 +77,59 @@
     return clamp(speedRatio * speedRatio * gust * elevation * projectedExposure * typeFactor * 6.5, 0, 32);
   }
 
+
+  // Compute two-dimensional rigid-body mass properties for an assembly of
+  // point masses and uniform line members. intrinsicInertia is each element's
+  // own inertia about its centroid; member rods use m * lengthSquared / 12.
+  // Inertia about a support pivot follows the parallel-axis theorem:
+  // I_pivot = I_COM + totalMass * distance(COM, pivot)^2.
+  function calculateMassProperties2D(elements = [], pivot = null) {
+    const samples = [];
+    let mass = 0;
+    let weightedX = 0;
+    let weightedY = 0;
+
+    for (const element of Array.isArray(elements) ? elements : []) {
+      const elementMass = finite(element && element.mass, 0);
+      const x = finite(element && element.x, NaN);
+      const y = finite(element && element.y, NaN);
+      if (!(elementMass > 0) || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+
+      const intrinsicInertia = Math.max(0, finite(
+        element.intrinsicInertia ?? element.inertia, 0
+      ));
+      samples.push({ mass: elementMass, x, y, intrinsicInertia });
+      mass += elementMass;
+      weightedX += elementMass * x;
+      weightedY += elementMass * y;
+    }
+
+    const comX = mass > 0 ? weightedX / mass : 0;
+    const comY = mass > 0 ? weightedY / mass : 0;
+    let inertiaAboutCOM = 0;
+    for (const element of samples) {
+      const dx = element.x - comX;
+      const dy = element.y - comY;
+      inertiaAboutCOM += element.intrinsicInertia + element.mass * (dx * dx + dy * dy);
+    }
+
+    const hasPivot = pivot && Number.isFinite(Number(pivot.x)) &&
+      Number.isFinite(Number(pivot.y));
+    const pivotX = hasPivot ? finite(pivot.x, comX) : comX;
+    const pivotY = hasPivot ? finite(pivot.y, comY) : comY;
+    const offsetX = comX - pivotX;
+    const offsetY = comY - pivotY;
+    const inertiaAboutPivot = inertiaAboutCOM + mass * (offsetX * offsetX + offsetY * offsetY);
+
+    return {
+      mass,
+      comX,
+      comY,
+      inertiaAboutCOM: Math.max(0, inertiaAboutCOM),
+      inertiaAboutPivot: Math.max(0, inertiaAboutPivot)
+    };
+  }
+
   function chooseQualityTier({ cpuMs = 8, cores = 4, memoryGB = 4, gpuExpected = false, gpuMs = null } = {}) {
     const cpu = Math.max(0, finite(cpuMs, 8));
     const hwCores = Math.max(1, finite(cores, 4));
@@ -101,6 +154,7 @@
     submergedFraction,
     environmentAcceleration,
     windMemberDemand,
+    calculateMassProperties2D,
     chooseQualityTier,
     shadeForMoisture
   });
