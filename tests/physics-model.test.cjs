@@ -128,7 +128,8 @@ test('asymmetric support loss creates a gravity-driven inward fold toward the we
   const model = loadModel();
   const weakRight = model.calculateFoldResponse({
     mass: 20, comX: 5, pivotX: 1, inertia: 200,
-    supportLoss: 0.25, supportCenterShift: -0.6, storyWidth: 3.15
+    supportLoss: 0.35, supportCenterShift: -0.6,
+    lostSupportCount: 2, maxSupportUtilization: 0.55, storyWidth: 3.15
   });
   assert.equal(weakRight.active, true);
   assert.equal(weakRight.direction, 1, 'a support-capacity shift left indicates weakness on the right');
@@ -137,7 +138,8 @@ test('asymmetric support loss creates a gravity-driven inward fold toward the we
 
   const weakLeft = model.calculateFoldResponse({
     mass: 20, comX: 5, pivotX: 9, inertia: 200,
-    supportLoss: 0.25, supportCenterShift: 0.6, storyWidth: 3.15
+    supportLoss: 0.35, supportCenterShift: 0.6,
+    lostSupportCount: 2, maxSupportUtilization: 0.55, storyWidth: 3.15
   });
   assert.equal(weakLeft.active, true);
   assert.equal(weakLeft.direction, -1);
@@ -145,7 +147,29 @@ test('asymmetric support loss creates a gravity-driven inward fold toward the we
 
   const symmetric = model.calculateFoldResponse({
     mass: 20, comX: 5, pivotX: 1, inertia: 200,
-    supportLoss: 0.25, supportCenterShift: 0, storyWidth: 3.15
+    supportLoss: 0.35, supportCenterShift: 0,
+    lostSupportCount: 2, maxSupportUtilization: 0.55, storyWidth: 3.15
   });
   assert.equal(symmetric.active, false, 'symmetric support loss alone does not invent a preferred folding direction');
+});
+
+test('one missing support member does not trigger folding in a strong redundant frame', () => {
+  const model = loadModel();
+  const strongFrame = model.calculateFoldResponse({
+    mass: 20, comX: 5, pivotX: 1, inertia: 240,
+    supportLoss: 0.32, supportCenterShift: -0.50,
+    lostSupportCount: 1, maxSupportUtilization: 0.55,
+    storyWidth: 3.15
+  });
+  assert.equal(strongFrame.active, false,
+    'one missing member and lightly loaded survivors should not induce a fold');
+
+  const criticalFrame = model.calculateFoldResponse({
+    mass: 20, comX: 5, pivotX: 1, inertia: 240,
+    supportLoss: 0.32, supportCenterShift: -0.50,
+    lostSupportCount: 1, maxSupportUtilization: 0.96,
+    storyWidth: 3.15
+  });
+  assert.equal(criticalFrame.active, true,
+    'a single support loss may fold the structure when remaining supports are near overload');
 });
