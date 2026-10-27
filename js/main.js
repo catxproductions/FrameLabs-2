@@ -2211,9 +2211,10 @@ function updateJointYielding(dt){
    const stress=getUnifiedAssemblyMemberStress(link);
    for(const [end,conn] of [['a',link.connectionA],['b',link.connectionB]]){
     if(conn.broken)continue;
-    const ratio=clamp(Math.max(stress.utilization*1.18,Number(conn.lastDemandRatio)||0),0,4);
+    const ratio=clamp(Math.max(stress.utilization*1.18,conn.pendingBreakUntil!=null?(Number(conn.lastDemandRatio)||0):0),0,4);
     if(ratio<.86&&conn.pendingBreakUntil==null)continue;
-    const angle=Number.isFinite(conn.forceAngle)?conn.forceAngle:stress.relativeAngle;
+    const recentImpactAge=sim.time-(Number(e.lastImpactTime)||-Infinity);
+    const angle=recentImpactAge<.5&&Number.isFinite(conn.forceAngle)?conn.forceAngle:stress.relativeAngle;
     const ready=conn.applyDemand(ratio,angle,dt,sim.time);
     if(end==='a')e.jointDamageA=conn.plasticDamage;else e.jointDamageB=conn.plasticDamage;
     if(ready){
