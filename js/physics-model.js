@@ -137,6 +137,7 @@
   function calculateFoldResponse({
     mass = 0, comX = 0, pivotX = 0, inertia = 0,
     supportLoss = 0, supportCenterShift = 0,
+    lostSupportCount = 0, maxSupportUtilization = 0,
     storyWidth = 3.15, gravity = 9.81
   } = {}) {
     const totalMass = Math.max(0, finite(mass));
@@ -144,11 +145,21 @@
     const pivot = finite(pivotX);
     const lost = clamp(finite(supportLoss), 0, 1);
     const shift = finite(supportCenterShift);
+    const missingSupports = Math.max(0, Math.trunc(finite(lostSupportCount)));
+    const peakUtilization = Math.max(0, finite(maxSupportUtilization));
     const bay = Math.max(0.1, finite(storyWidth, 3.15));
     const g = Math.max(0, finite(gravity, 9.81));
     const shiftMagnitude = Math.abs(shift);
 
-    if (totalMass <= 0 || lost < 0.10 || shiftMagnitude < bay * 0.025) {
+    // A fold is a last-resort failure mode, not the default response to one
+    // missing member. Require significant support-capacity loss and imbalance,
+    // plus either multiple unavailable supports or near-overload in survivors.
+    if (
+      totalMass <= 0 ||
+      lost < 0.28 ||
+      shiftMagnitude < bay * 0.10 ||
+      (missingSupports < 2 && peakUtilization < 0.90)
+    ) {
       return {
         active: false, direction: 0, severity: 0,
         torque: 0, angularAcceleration: 0
@@ -156,7 +167,8 @@
     }
 
     const imbalance = clamp(shiftMagnitude / (bay * 0.65), 0, 1);
-    const severity = clamp(lost * 0.62 + imbalance * 0.48, 0, 1);
+    const overloadFactor = clamp((peakUtilization - 0.75) / 0.5, 0, 1);
+    const severity = clamp(lost * 0.62 + imbalance * 0.48 + overloadFactor * 0.10, 0, 1);
     const torque = -(center - pivot) * totalMass * g * severity;
     const angularAcceleration = clamp(
       torque / Math.max(0.25, finite(inertia, 0.25)),
@@ -164,7 +176,7 @@
     );
 
     return {
-      active: severity >= 0.08 && Number.isFinite(torque),
+      active: severity >= 0.12 && Number.isFinite(torque),
       // Positive direction means the upper block folds toward the right.
       direction: -Math.sign(shift),
       severity,
