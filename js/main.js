@@ -1777,17 +1777,107 @@ function queryDebrisMemberCollisionLinks(grid,cellSize,left,right,bottom,top){
  }
  return result;
 }
+function wakeDebris(d,resetAge=false){
+ if(!d)return;
+ d.settled=false;d.grounded=false;d.permanentSettled=false;
+ d.supportType=null;d.supportId=null;d.supportT=null;
+ d.supportAnchorX=null;d.supportAnchorY=null;
+ if(resetAge)d.age=0;
+}
+function memberSurfaceSupportsDebris(link){
+ if(!link||!linkTransfersSupport(link))return false;
+ const e=link.e,a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];
+ if(!a||!b||e.failed||e.snapped||e.integrity<=.01||e.isFreefalling||e.unsupported===true)return false;
+ return !!(a.isGroundConnected&&b.isGroundConnected&&
+  Math.hypot(a.velocity.x,a.velocity.y)<.18&&Math.hypot(b.velocity.x,b.velocity.y)<.18);
+}
+function debrisRestingSupportIsStable(d,byId,visiting=new Set()){
+ if(!d||!d.settled||visiting.has(d.id))return false;
+ if(d.supportType==='ground')return d.permanentSettled===true&&d.grounded===true;
+ if(d.permanentSettled)return false;
+ visiting.add(d.id);
+ let stable=false;
+ if(d.supportType==='member'){
+  const link=sim.memberLinks.find(item=>item.id===d.supportId);
+  if(memberSurfaceSupportsDebris(link)){
+   const t=clamp(Number(d.supportT)||0,0,1),a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];
+   const x=a.position.x+(b.position.x-a.position.x)*t,y=a.position.y+(b.position.y-a.position.y)*t;
+   stable=Number.isFinite(d.supportAnchorX)&&Number.isFinite(d.supportAnchorY)&&
+    Math.hypot(x-d.supportAnchorX,y-d.supportAnchorY)<.12;
+  }
+ }else if(d.supportType==='debris'){
+  const support=byId.get(d.supportId);
+  if(support&&support!==d&&debrisRestingSupportIsStable(support,byId,visiting)){
+   const upper=updateDebrisBounds(d),lower=updateDebrisBounds(support);
+   const overlap=Math.min(upper.right,lower.right)-Math.max(upper.left,lower.left);
+   const gap=upper.bottom-lower.top;
+   stable=overlap>.025&&gap>=-.10&&gap<=.14;
+  }
+ }
+ visiting.delete(d.id);
+ return stable;
+}
+function refreshDebrisRestingStates(){
+ const byId=new Map(sim.debris.map(d=>[d.id,d]));
+ for(const d of sim.debris)if(d.settled&&!debrisRestingSupportIsStable(d,byId))wakeDebris(d,true);
+}
+function canRestOnSurface(relativeSpeed,relativeHorizontalSpeed,angularSpeed,d,surfaceSupported,onSimulationGround=false){
+ if(PHYSICS_MODEL?.canDebrisSettle){
+  return PHYSICS_MODEL.canDebrisSettle({
+   relativeSpeed,relativeHorizontalSpeed,angularSpeed,kind:d.kind,angle:d.angle,
+   surfaceSupported,onSimulationGround
+  });
+ }
+ return (onSimulationGround||surfaceSupported)&&relativeSpeed<.65&&
+  Math.abs(relativeHorizontalSpeed)<.45&&Math.abs(angularSpeed)<.18&&
+  !(d.kind==='column'&&Math.abs(Math.sin(d.angle))>=.80);
+}
+function settleDebrisOnMember(d,link,t,surfaceY,surfaceVx,surfaceVy){
+ if(!memberSurfaceSupportsDebris(link))return false;
+ const relativeSpeed=Math.hypot(d.vx-surfaceVx,d.vy-surfaceVy);
+ if(!canRestOnSurface(relativeSpeed,d.vx-surfaceVx,d.angularVelocity,d,true,false))return false;
+ const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB],supportT=clamp(Number(t)||0,0,1);
+ d.angle=Math.round(d.angle/(Math.PI/2))*(Math.PI/2);
+ const halfY=(Math.abs(Math.sin(d.angle))*d.length+Math.abs(Math.cos(d.angle))*d.thickness)*.5;
+ d.y=surfaceY+halfY;d.vx=surfaceVx;d.vy=surfaceVy;d.angularVelocity=0;
+ d.settled=true;d.grounded=false;d.permanentSettled=false;d.supportType='member';d.supportId=link.id;d.supportT=supportT;
+ d.supportAnchorX=a.position.x+(b.position.x-a.position.x)*supportT;
+ d.supportAnchorY=a.position.y+(b.position.y-a.position.y)*supportT;
+ updateDebrisBounds(d);
+ return true;
+}
+function settleDebrisOnDebris(top,support,normalY,closingSpeed){
+ if(!top||!support||top===support||!support.settled||Math.abs(normalY)<.70)return false;
+ const byId=new Map(sim.debris.map(d=>[d.id,d]));
+ if(!debrisRestingSupportIsStable(support,byId))return false;
+ const topWasAbove=top.y>support.y;
+ if((topWasAbove&&normalY>=-.70)||(!topWasAbove&&normalY<=.70))return false;
+ updateDebrisBounds(top);updateDebrisBounds(support);
+ const horizontalOverlap=Math.min(top.collisionBounds.right,support.collisionBounds.right)-Math.max(top.collisionBounds.left,support.collisionBounds.left);
+ const verticalGap=top.collisionBounds.bottom-support.collisionBounds.top;
+ if(horizontalOverlap<=.025||verticalGap<-.10||verticalGap>.14)return false;
+ const relativeVx=top.vx-support.vx,relativeVy=top.vy-support.vy;
+ const relativeSpeed=Math.hypot(relativeVx,relativeVy);
+ if(!canRestOnSurface(relativeSpeed,relativeVx,top.angularVelocity,top,true,false))return false;
+ top.angle=Math.round(top.angle/(Math.PI/2))*(Math.PI/2);
+ const halfY=(Math.abs(Math.sin(top.angle))*top.length+Math.abs(Math.cos(top.angle))*top.thickness)*.5;
+ top.y=support.collisionBounds.top+halfY;top.vx=support.vx;top.vy=support.vy;top.angularVelocity=0;
+ top.settled=true;top.grounded=false;top.permanentSettled=false;top.supportType='debris';top.supportId=support.id;
+ top.supportT=null;top.supportAnchorX=null;top.supportAnchorY=null;
+ updateDebrisBounds(top);
+ return true;
+}
 async function updateDebris(dt){
- const activeSimulation=sim,collisionIndex=buildDebrisMemberCollisionIndex();
+ const activeSimulation=sim;refreshDebrisRestingStates();const collisionIndex=buildDebrisMemberCollisionIndex();
  const motionSnapshots=new Map(),motionBodies=[];
  // Age/remove settled fragments first, then send all live rigid-body force integration
  // to the same CPU-worker/WebGPU kernel used by structural joints.
  for(let i=sim.debris.length-1;i>=0;i--){
   const d=sim.debris[i];d.age+=dt;
   const tetheredDebris=gravityTether?.kind==='debris'&&gravityTether.id===d.id;
-  if(d.age>26&&!tetheredDebris){sim.debris.splice(i,1);continue}
+  if(d.age>26&&!tetheredDebris&&!d.settled){sim.debris.splice(i,1);continue}
   if(d.settled&&!tetheredDebris)continue;
-  if(tetheredDebris){d.settled=false;d.grounded=false}
+  if(tetheredDebris)wakeDebris(d);
   const oldBounds=updateDebrisBounds(d),oldX=d.x,oldY=d.y;
   const projectedWidth=Math.abs(Math.cos(d.angle))*d.length+Math.abs(Math.sin(d.angle))*d.thickness;
   const projectedHeight=Math.abs(Math.sin(d.angle))*d.length+Math.abs(Math.cos(d.angle))*d.thickness;
@@ -1829,7 +1919,7 @@ async function updateDebris(dt){
    if(depth<=0){const oldSide=(oldX-a.position.x)*nlx+(oldY-a.position.y)*nly,newSide=(d.x-a.position.x)*nlx+(d.y-a.position.y)*nly;if(oldSide*newSide>0||Math.abs(oldSide-newSide)<1e-6)continue;const alpha=clamp(oldSide/(oldSide-newSide),0,1);cx=oldX+(d.x-oldX)*alpha;cy=oldY+(d.y-oldY)*alpha;const along=(cx-a.position.x)*tx+(cy-a.position.y)*ty;if(along<-.12||along>len+.12)continue;const side=oldSide>=0?1:-1;nx=nlx*side;ny=nly*side;t=clamp(along/len,0,1);radius=debrisProjectionRadius(d,nx,ny)+.065;depth=radius;dist=0;swept=true;}
    else{nx/=Math.max(1e-6,dist);ny/=Math.max(1e-6,dist)}
    if(depth>0&&(!columnContact||depth>columnContact.depth))columnContact={link,a,b,t,qx:a.position.x+sx*t,qy:a.position.y+sy*t,nx,ny,depth,cx,cy,radius,swept,dist};}
-  if(columnContact){const c=columnContact,surfaceVx=c.a.velocity.x+(c.b.velocity.x-c.a.velocity.x)*c.t,surfaceVy=c.a.velocity.y+(c.b.velocity.y-c.a.velocity.y)*c.t,preVx=d.vx,preVy=d.vy,rvx=preVx-surfaceVx,rvy=preVy-surfaceVy,vn=rvx*c.nx+rvy*c.ny,closing=Math.max(0,-vn),impactNode={position:{x:c.qx,y:c.qy},velocity:{x:preVx,y:preVy},lastImpactTime:sim.time};if(c.swept){d.x=c.cx+c.nx*(c.radius+.002);d.y=c.cy+c.ny*(c.radius+.002)}else{d.x+=c.nx*(c.depth+.002);d.y+=c.ny*(c.depth+.002)}if(vn<0){const response=getContactResponse(d.material,c.link.e.material,closing),j=-(1+response.restitution)*vn;d.vx+=j*c.nx;d.vy+=j*c.ny;const tx=-c.ny,ty=c.nx,vt=(d.vx-surfaceVx)*tx+(d.vy-surfaceVy)*ty,grip=clamp(response.dynamicFriction*.72,.06,.72);d.vx-=tx*vt*grip;d.vy-=ty*vt*grip;const rx=c.qx-d.x,ry=c.qy-d.y;d.angularVelocity=clamp(d.angularVelocity+(rx*(j*c.ny)-ry*(j*c.nx))/Math.max(.02,d.momentOfInertia),-3,3);if(d.settled&&closing>.65){d.settled=false;d.grounded=false}}
+  if(columnContact){const c=columnContact,surfaceVx=c.a.velocity.x+(c.b.velocity.x-c.a.velocity.x)*c.t,surfaceVy=c.a.velocity.y+(c.b.velocity.y-c.a.velocity.y)*c.t,preVx=d.vx,preVy=d.vy,rvx=preVx-surfaceVx,rvy=preVy-surfaceVy,vn=rvx*c.nx+rvy*c.ny,closing=Math.max(0,-vn),impactNode={position:{x:c.qx,y:c.qy},velocity:{x:preVx,y:preVy},lastImpactTime:sim.time};if(c.swept){d.x=c.cx+c.nx*(c.radius+.002);d.y=c.cy+c.ny*(c.radius+.002)}else{d.x+=c.nx*(c.depth+.002);d.y+=c.ny*(c.depth+.002)}if(vn<0){const response=getContactResponse(d.material,c.link.e.material,closing),j=-(1+response.restitution)*vn;d.vx+=j*c.nx;d.vy+=j*c.ny;const tx=-c.ny,ty=c.nx,vt=(d.vx-surfaceVx)*tx+(d.vy-surfaceVy)*ty,grip=clamp(response.dynamicFriction*.72,.06,.72);d.vx-=tx*vt*grip;d.vy-=ty*vt*grip;const rx=c.qx-d.x,ry=c.qy-d.y;d.angularVelocity=clamp(d.angularVelocity+(rx*(j*c.ny)-ry*(j*c.nx))/Math.max(.02,d.momentOfInertia),-3,3);if(d.settled&&closing>.65)wakeDebris(d)}
    if(closing>.55)handleMemberImpact(impactNode,c.link,closing,{mass:d.mass,memberIds:new Set(),signature:`debris:${d.id}`});bounds=updateDebrisBounds(d);halfY=(bounds.top-bounds.bottom)*.5;}
   let contact=null;
   const floorSearchLeft=Math.min(oldBounds.left,bounds.left),floorSearchRight=Math.max(oldBounds.right,bounds.right),floorSearchBottom=Math.min(oldBounds.bottom,bounds.bottom)-.045,floorSearchTop=Math.max(oldBounds.top,bounds.top)+.045;
@@ -1856,13 +1946,16 @@ async function updateDebris(dt){
    const response=getContactResponse(d.material,target.e.material,closingSpeed),grip=clamp(response.dynamicFriction*.68,.07,.70);d.y=contact.surface+halfY;d.vy=contact.surfaceVy+closingSpeed*response.restitution;d.vx=contact.surfaceVx+(d.vx-contact.surfaceVx)*(1-grip);d.angularVelocity=clamp(d.angularVelocity+(contact.x-(sim.nodes[target.nodeA].position.x+sim.nodes[target.nodeB].position.x)*.5)*closingSpeed*Math.max(.01,d.mass)/Math.max(.02,d.momentOfInertia)*.012,-2.8,2.8)*(1-grip*.20);
    if(closingSpeed>.45){d.impactCount=(d.impactCount||0)+1;d.reason+=' · impact '+d.impactCount;handleMemberImpact(impactNode,target,closingSpeed,{mass:d.mass,memberIds:new Set(),signature:`debris:${d.id}`});}
    const nearVertical=d.kind==='column'&&Math.abs(Math.sin(d.angle))>.70;if(nearVertical&&closingSpeed>.45)d.angularVelocity=d.tipDirection*Math.max(.28,Math.abs(d.angularVelocity));
-   if(closingSpeed<.65&&Math.abs(d.angularVelocity)<.18&&(d.kind!=='column'||Math.abs(Math.sin(d.angle))<.80)){d.settled=true;d.vx=contact.surfaceVx;d.vy=contact.surfaceVy;d.angularVelocity=0;d.angle=Math.round(d.angle/(Math.PI/2))*(Math.PI/2);d.y=contact.surface+(Math.abs(Math.cos(d.angle))*d.thickness+Math.abs(Math.sin(d.angle))*d.length)*.5;}
+   settleDebrisOnMember(d,target,contact.t,contact.surface,contact.surfaceVx,contact.surfaceVy);
    updateDebrisBounds(d);
   }else if(groundHit){
    const closingSpeed=Math.max(0,-d.vy),impactNode={position:{x:d.x,y:0},velocity:{x:d.vx,y:d.vy},lastImpactTime:sim.time},response=getContactResponse(d.material,'concrete',closingSpeed),grip=clamp(response.dynamicFriction*.66,.07,.68);d.y=halfY;d.vy=closingSpeed*response.restitution;d.vx*=1-grip;const nearVertical=d.kind==='column'&&Math.abs(Math.sin(d.angle))>.70;
    if(nearVertical&&closingSpeed>.45){d.angularVelocity=d.tipDirection*Math.max(.28,Math.abs(d.angularVelocity));d.vx+=d.tipDirection*.025}else d.angularVelocity*=.55;
-   const body={mass:d.mass,memberIds:new Set(),signature:`debris:${d.id}`};if(!d.grounded&&closingSpeed>.45)handleGroundImpact(impactNode,closingSpeed,body);d.grounded=true;
-   if(closingSpeed<.65&&Math.abs(d.angularVelocity)<.16&&(d.kind!=='column'||Math.abs(Math.sin(d.angle))<.80)){d.settled=true;d.vx=0;d.vy=0;d.angularVelocity=0;d.y=halfY;}updateDebrisBounds(d);
+   const body={mass:d.mass,memberIds:new Set(),signature:`debris:${d.id}`};if(!d.grounded&&closingSpeed>.45)handleGroundImpact(impactNode,closingSpeed,body);
+   const groundCanSettle=canRestOnSurface(closingSpeed,0,d.angularVelocity,d,true,true);
+   if(groundCanSettle){d.settled=true;d.grounded=true;d.permanentSettled=true;d.supportType='ground';d.supportId=null;d.supportT=null;d.supportAnchorX=null;d.supportAnchorY=null;d.vx=0;d.vy=0;d.angularVelocity=0;d.y=halfY;}
+   else{d.settled=false;d.grounded=false;d.permanentSettled=false;d.supportType=null;d.supportId=null;d.supportT=null;d.supportAnchorX=null;d.supportAnchorY=null;}
+   updateDebrisBounds(d);
   }
   if(Math.abs(d.x)>NX*STORY_HEIGHT*1.8){d.x=clamp(d.x,-NX*STORY_HEIGHT*.5,NX*STORY_HEIGHT*1.5);d.vx*=-.25}
  }
@@ -1874,7 +1967,7 @@ function debrisInertia(d){return Math.max(.01,d.mass*(d.length*d.length+d.thickn
 function fragmentDebris(d,energy){
  if(!d||d.fragmentDepth>=2||d.length<.24||sim.debris.length>=MAX_DEBRIS-1)return false;const index=sim.debris.indexOf(d);if(index<0)return false;
  const childMass=Math.max(.015,d.mass*.44),childLength=Math.max(.10,d.length*.52),childThickness=Math.max(.035,d.thickness*.72),kick=clamp(Math.sqrt(Math.max(.01,energy)/Math.max(.05,d.mass))*.20,.25,2.2),next=[];
- for(const sign of [-1,1]){const child={...d,id:sim.nextDebrisId++,sourceId:`fragment:${d.id}`,x:d.x+Math.cos(d.angle)*sign*childLength*.18,y:d.y+Math.sin(d.angle)*sign*childLength*.18,angle:d.angle+sign*.10,length:childLength,thickness:childThickness,mass:childMass,capacity:Math.max(.01,d.capacity*.38),durability:Math.max(.5,d.durability*.34),integrity:.62,vx:clamp(d.vx+sign*Math.cos(d.angle)*kick,-MAX_FALL_SPEED,MAX_FALL_SPEED),vy:clamp(d.vy+sign*Math.sin(d.angle)*kick+.12,-MAX_FALL_SPEED,MAX_FALL_SPEED),angularVelocity:clamp(d.angularVelocity+sign*.32,-3.2,3.2),momentOfInertia:Math.max(.01,childMass*childLength*childLength/12),age:0,settled:false,grounded:false,fragmentDepth:(d.fragmentDepth||0)+1,fragmented:false,reason:`fragmented after impact · ${d.material}`,impactCooldown:-Infinity,impactCount:(d.impactCount||0)+1};updateDebrisBounds(child);next.push(child)}
+ for(const sign of [-1,1]){const child={...d,id:sim.nextDebrisId++,sourceId:`fragment:${d.id}`,x:d.x+Math.cos(d.angle)*sign*childLength*.18,y:d.y+Math.sin(d.angle)*sign*childLength*.18,angle:d.angle+sign*.10,length:childLength,thickness:childThickness,mass:childMass,capacity:Math.max(.01,d.capacity*.38),durability:Math.max(.5,d.durability*.34),integrity:.62,vx:clamp(d.vx+sign*Math.cos(d.angle)*kick,-MAX_FALL_SPEED,MAX_FALL_SPEED),vy:clamp(d.vy+sign*Math.sin(d.angle)*kick+.12,-MAX_FALL_SPEED,MAX_FALL_SPEED),angularVelocity:clamp(d.angularVelocity+sign*.32,-3.2,3.2),momentOfInertia:Math.max(.01,childMass*childLength*childLength/12),age:0,settled:false,grounded:false,permanentSettled:false,supportType:null,supportId:null,supportT:null,supportAnchorX:null,supportAnchorY:null,fragmentDepth:(d.fragmentDepth||0)+1,fragmented:false,reason:`fragmented after impact · ${d.material}`,impactCooldown:-Infinity,impactCount:(d.impactCount||0)+1};updateDebrisBounds(child);next.push(child)}
  sim.debris.splice(index,1,...next);return true;
 }
 function finishDebrisCollisionFragments(fragments){
@@ -1918,7 +2011,7 @@ async function resolveDebrisCollisions(dt){
    for(let i=0;i<live.length;i++){
     const d=live[i],b=i*stride;d.x=wasmResult.bodies[b];d.y=wasmResult.bodies[b+1];d.vx=wasmResult.bodies[b+2];d.vy=wasmResult.bodies[b+3];
     d.angle=wasmResult.bodies[b+4];d.angularVelocity=wasmResult.bodies[b+5];d.settled=!!wasmResult.bodies[b+9];
-    if(wasSettled[i]&&!d.settled)d.grounded=false;
+    if(wasSettled[i]&&!d.settled)wakeDebris(d);
     updateDebrisBounds(d);
    }
    const fragments=[];
@@ -1955,10 +2048,13 @@ async function resolveDebrisCollisions(dt){
   if(vn<0){const response=getContactResponse(a.material,b.material,Math.abs(vn)),ia=debrisInertia(a),ib=debrisInertia(b),ca=rAx*ny-rAy*nx,cb=rBx*ny-rBy*nx,denom=imA+imB+ca*ca/ia+cb*cb/ib;if(denom>1e-8){normalImpulse=clamp(-(1+response.restitution)*vn/denom,0,Math.max(.1,(a.mass+b.mass)*MAX_FALL_SPEED*1.8));a.vx-=normalImpulse*imA*nx;a.vy-=normalImpulse*imA*ny;b.vx+=normalImpulse*imB*nx;b.vy+=normalImpulse*imB*ny;a.angularVelocity=clamp(a.angularVelocity-normalImpulse*ca/ia,-3.4,3.4);b.angularVelocity=clamp(b.angularVelocity+normalImpulse*cb/ib,-3.4,3.4);
     va=pointVel(a,rAx,rAy);vb=pointVel(b,rBx,rBy);rvx=vb.x-va.x;rvy=vb.y-va.y;const vt=rvx*tangentX+rvy*tangentY,ta=rAx*tangentY-rAy*tangentX,tb=rBx*tangentY-rBy*tangentX,tDenom=imA+imB+ta*ta/ia+tb*tb/ib;let jt=tDenom>1e-8?-vt/tDenom:0;jt=clamp(jt,-normalImpulse*clamp(response.dynamicFriction,.06,.82),normalImpulse*clamp(response.dynamicFriction,.06,.82));a.vx-=jt*imA*tangentX;a.vy-=jt*imA*tangentY;b.vx+=jt*imB*tangentX;b.vy+=jt*imB*tangentY;a.angularVelocity=clamp(a.angularVelocity-jt*ta/ia,-3.4,3.4);b.angularVelocity=clamp(b.angularVelocity+jt*tb/ib,-3.4,3.4);
    }}
-  if(normalImpulse>.08){if(a.settled&&normalImpulse>.3){a.settled=false;a.grounded=false}if(b.settled&&normalImpulse>.3){b.settled=false;b.grounded=false}}
+  if(normalImpulse>.08){if(a.settled&&normalImpulse>.3)wakeDebris(a);if(b.settled&&normalImpulse>.3)wakeDebris(b)}
   const closing=Math.max(0,-vn),reducedMass=imA+imB>0?1/(imA+imB):0,energy=.5*reducedMass*closing*closing;
   const impactPairKey=a.id<b.id?`${a.id}:${b.id}`:`${b.id}:${a.id}`,stamp=`debris-impact:${impactPairKey}`,freshImpact=sim.time-(sim.collisionPairs[stamp]??-Infinity)>.18;if(closing>.8&&energy>.05&&freshImpact){sim.collisionPairs[stamp]=sim.time;const damageA=Math.min(.35,energy/Math.max(1,a.durability||1)*.22),damageB=Math.min(.35,energy/Math.max(1,b.durability||1)*.22);a.integrity=clamp((a.integrity??1)-damageA,0,1);b.integrity=clamp((b.integrity??1)-damageB,0,1);a.impactCount=(a.impactCount||0)+1;b.impactCount=(b.impactCount||0)+1;a.reason=a.reason||'debris collision';b.reason=b.reason||'debris collision';if((energy>Math.max(1,(a.durability||1)*.85)||a.integrity<.12)&&a.fragmentDepth<2)fragments.push([a,energy]);if((energy>Math.max(1,(b.durability||1)*.85)||b.integrity<.12)&&b.fragmentDepth<2)fragments.push([b,energy]);}
   a.vx=clamp(a.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vx=clamp(b.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);a.vy=clamp(a.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vy=clamp(b.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);updateDebrisBounds(a);updateDebrisBounds(b);
+  // Low-energy vertical contacts form a rubble pile, but the top piece remains linked to its support.
+  if(a.y>b.y)settleDebrisOnDebris(a,b,ny,closing);
+  else if(b.y>a.y)settleDebrisOnDebris(b,a,-ny,closing);
  }
  finishDebrisCollisionFragments(fragments);
 }
