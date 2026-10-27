@@ -131,6 +131,35 @@
   }
 
 
+
+  // Detached assemblies should be judged by their local structural demand,
+  // not by a missing path to ground. The latter is a motion/support condition,
+  // not proof that every member is already overloaded.
+  function calculateDetachedMemberUtilization({
+    demand = 0, capacity = 1, integrity = 1,
+    connectionFactor = 1, momentUtilization = 0
+  } = {}) {
+    const remainingIntegrity = clamp(finite(integrity, 1), 0, 1);
+    const jointFactor = clamp(finite(connectionFactor, 1), 0.18, 1);
+    const effectiveCapacity = Math.max(
+      0.01,
+      Math.max(0, finite(capacity)) * remainingIntegrity * jointFactor
+    );
+    const forceUtilization = Math.max(0, finite(demand)) / effectiveCapacity;
+    const bendingUtilization = Math.max(0, finite(momentUtilization));
+    return Math.max(forceUtilization, bendingUtilization);
+  }
+
+  // A column carried by a rotating/falling frame should be tested against the
+  // frame's orientation, not the world's vertical. This prevents a rigid-body
+  // tumble from being mistaken for local column bending.
+  function columnTiltRelativeToAssembly(dx, dy, assemblyAngle = 0) {
+    const segmentAngle = Math.atan2(finite(dy), finite(dx));
+    const expectedAngle = Math.PI * 0.5 + finite(assemblyAngle);
+    const difference = segmentAngle - expectedAngle;
+    return Math.abs(Math.atan2(Math.sin(difference), Math.cos(difference)));
+  }
+
   // Model a partial-story collapse as a hinge around the surviving support
   // on the opposite side of a damaged support line. centerShift is
   // active-support COM minus nominal-support COM; its sign identifies the weak side.
@@ -211,6 +240,8 @@
     windMemberDemand,
     calculateMassProperties2D,
     calculateFoldResponse,
+    calculateDetachedMemberUtilization,
+    columnTiltRelativeToAssembly,
     chooseQualityTier,
     shadeForMoisture
   });
