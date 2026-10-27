@@ -727,12 +727,24 @@ function analyzeStructure(){
  // damage continue through their normal failure paths.
  for(const link of sim.memberLinks){
   const e=link.e;if(!e.isFreefalling||e.failed||e.snapped)continue;
-  const localUtilization=PHYSICS_MODEL?.calculateDetachedMemberUtilization?.({
-   demand:e.demand,capacity:e.capacity,integrity:e.integrity,
-   connectionFactor:e.connectionFactor,momentUtilization:e.kind==='beam'?e.momentUtilization:0
-  });
-  const capacity=Math.max(.01,Math.max(0,Number(e.capacity)||0)*clamp(Number(e.integrity??1),0,1)*Math.max(.18,Number(e.connectionFactor)||1));
-  e.utilization=Number.isFinite(localUtilization)?localUtilization:Math.max(Math.max(0,Number(e.demand)||0)/capacity,e.kind==='beam'?Math.max(0,Number(e.momentUtilization)||0):0);
+  if(e.isUnifiedFallingAssembly){
+   // Free fall removes the assembly's own weight from internal member stress.
+   // Use external wind, collision stress and deformation relative to the whole
+   // assembly, never the unsupported-only gravity/load-path penalty.
+   const stress=getUnifiedAssemblyMemberStress(link);
+   e.unifiedAssemblyStress=stress.utilization;
+   e.unifiedAssemblyAxialStrain=stress.axialStrain;
+   e.unifiedAssemblyRelativeAngle=stress.relativeAngle;
+   e.utilization=stress.utilization;
+   if(e.kind==='beam')e.momentUtilization=stress.bendingUtilization;
+  }else{
+   const localUtilization=PHYSICS_MODEL?.calculateDetachedMemberUtilization?.({
+    demand:e.demand,capacity:e.capacity,integrity:e.integrity,
+    connectionFactor:e.connectionFactor,momentUtilization:e.kind==='beam'?e.momentUtilization:0
+   });
+   const capacity=Math.max(.01,Math.max(0,Number(e.capacity)||0)*clamp(Number(e.integrity??1),0,1)*Math.max(.18,Number(e.connectionFactor)||1));
+   e.utilization=Number.isFinite(localUtilization)?localUtilization:Math.max(Math.max(0,Number(e.demand)||0)/capacity,e.kind==='beam'?Math.max(0,Number(e.momentUtilization)||0):0);
+  }
   e.dynamicUtilization=e.utilization;
  }
  // Rebuild the aggregate readout after correcting unsupported-only penalties.
@@ -757,6 +769,23 @@ function estimateAssemblyOrientation(nodeKeys,nodes){
  if(total<=0||samples.length<2)return 0;refX/=total;refY/=total;posX/=total;posY/=total;let dot=0,cross=0;
  for(const p of samples){const rx=p.rx-refX,ry=p.ry-refY,x=p.x-posX,y=p.y-posY;dot+=p.mass*(rx*x+ry*y);cross+=p.mass*(rx*y-ry*x);}
  return Math.abs(dot)+Math.abs(cross)>1e-8?Math.atan2(cross,dot):0;
+}
+function getUnifiedAssemblyMemberStress(link){
+ const e=link?.e,a=sim.nodes[link?.nodeA],b=sim.nodes[link?.nodeB];
+ if(!e||!a||!b)return {utilization:0,windUtilization:0,impactUtilization:0,axialUtilization:0,bendingUtilization:0,axialStrain:0,relativeAngle:0};
+ const assemblyId=e.unifiedAssemblyId||sim.stability?.nodeAssembly?.[link.nodeA];
+ const assembly=assemblyId?sim.stability?.byId?.[assemblyId]:null;
+ const restLength=Math.max(.01,Number(link.restLength)||Math.hypot((b.reference?.x||0)-(a.reference?.x||0),(b.reference?.y||0)-(a.reference?.y||0)));
+ const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y,length=Math.max(.001,Math.hypot(dx,dy));
+ const referenceAngle=Math.atan2((b.reference?.y||0)-(a.reference?.y||0),(b.reference?.x||0)-(a.reference?.x||0));
+ const actualAngle=Math.atan2(dy,dx),assemblyAngle=Number.isFinite(assembly?.orientationAngle)?assembly.orientationAngle:estimateAssemblyOrientation(new Set([link.nodeA,link.nodeB]),sim.nodes);
+ const relativeAngle=Math.atan2(Math.sin(actualAngle-referenceAngle-assemblyAngle),Math.cos(actualAngle-referenceAngle-assemblyAngle));
+ const axialStrain=(length-restLength)/restLength;
+ const result=PHYSICS_MODEL?.calculateUnifiedAssemblyStress?.({
+  capacity:e.capacity,integrity:e.integrity,connectionFactor:e.connectionFactor,
+  windDemand:e.windDemand,impactStress:e.impactStress,axialStrain,relativeAngle
+ })||{utilization:Math.max(Math.max(0,Number(e.windDemand)||0)/Math.max(.01,(Number(e.capacity)||.01)*(Number(e.integrity)||1)*(Number(e.connectionFactor)||1)),Math.abs(axialStrain)/.18,Math.abs(relativeAngle)/.32,(Number(e.impactStress)||0)/1.25),windUtilization:0,impactUtilization:0,axialUtilization:0,bendingUtilization:Math.abs(relativeAngle)/.32};
+ return {...result,axialStrain,relativeAngle,assemblyAngle};
 }
 function calculateStability(analysis){
  const nodes=sim.nodes||Object.create(null),links=sim.memberLinks||[],nodeKeys=Object.keys(nodes),adj=Object.create(null),nodeAssembly=Object.create(null),components=[];
@@ -788,6 +817,18 @@ function calculateStability(analysis){
   c.key=`${[...c.nodeKeys].sort().join('|')}`;let dyn=previous[c.key];if(!dyn){let overlapBest=0;for(const old of Object.values(previous)){const oldKeys=old.nodeKeys instanceof Set?old.nodeKeys:new Set(old.nodeKeys||[]);let overlap=0;for(const k of c.nodeKeys)if(oldKeys.has(k))overlap++;if(overlap>overlapBest){overlapBest=overlap;dyn=old}}}dyn={rotation:Number(dyn?.rotation)||0,angularVelocity:Number(dyn?.angularVelocity)||0,angularAcceleration:Number(dyn?.angularAcceleration)||0,torque:Number(dyn?.torque)||0,isRotating:!!dyn?.isRotating,foldHinge:dyn?.foldHinge||null,pivotX:c.pivotX,pivotY:0,momentOfInertiaCOM:c.momentOfInertiaCOM,momentOfInertia:c.momentOfInertia,nodeKeys:new Set(c.nodeKeys)};dyn.pivotX=c.pivotX;dyn.pivotY=0;dyn.momentOfInertiaCOM=c.momentOfInertiaCOM;dyn.momentOfInertia=c.momentOfInertia;c.dynamics=dyn;if(!c.shouldTip&&Math.abs(dyn.rotation)>.01)c.tippingDirection=dyn.rotation<0?'right':'left';nextDynamics[c.key]=dyn;for(const key of c.nodeKeys)nodeAssembly[key]=c.key;c.id=c.key;assemblies.push(c);byId[c.key]=c;
  }
  sim.assemblyDynamics=nextDynamics;sim.stability={assemblies,primary:null,nodeAssembly,byId};
+ // Tag intact members in disconnected components as one unified falling assembly.
+ // The tag is cleared as soon as a member/joint actually separates.
+ for(const link of links){
+  const e=link.e,aId=nodeAssembly[link.nodeA],bId=nodeAssembly[link.nodeB];
+  e.unifiedAssemblyId=null;e.isUnifiedFallingAssembly=false;
+  if(!aId||aId!==bId||!linkTransfersSupport(link))continue;
+  const assembly=byId[aId];
+  if(assembly?.isFloating){
+   e.unifiedAssemblyId=assembly.key;
+   e.isUnifiedFallingAssembly=true;
+  }
+ }
  const eligible=assemblies.filter(c=>c.members.length||c.supportPoints.length).sort((a,b)=>{const ar=a.supportPoints.length?1:0,br=b.supportPoints.length?1:0;if(ar!==br)return br-ar;return b.totalMass-a.totalMass});
  const risk=eligible.filter(c=>c.shouldTip||c.isFloating).sort((a,b)=>b.totalMass-a.totalMass);sim.stability.primary=risk[0]||eligible[0]||null;
  // A detached assembly's whole-body rotation is not internal member stress.
@@ -2096,6 +2137,15 @@ function evaluateBeamBending(dt){
  const candidates=[],bySpan=Object.create(null);
  for(const link of sim.memberLinks){
   const e=link.e;if(e.kind!=='beam'||e.failed||e.snapped||e.integrity<=.02)continue;
+  if(e.isUnifiedFallingAssembly){
+   // Static span analysis assumes gravity load is carried to ground. That is
+   // invalid during free fall; use local deformation/impact stress instead.
+   const stress=getUnifiedAssemblyMemberStress(link);
+   e.bendingMoment=stress.bendingUtilization*Math.max(.01,e.momentCapacity||e.capacity*.42);
+   e.momentUtilization=stress.bendingUtilization;
+   e.momentOverloadTime=0;
+   continue;
+  }
   const bending=beamBendingData(e);e.bendingMoment=bending.moment;e.effectiveSpan=bending.span.bays;
   e.momentUtilization=bending.moment/Math.max(.01,(e.momentCapacity||e.capacity*.42)*e.integrity*Math.max(.18,e.connectionFactor||1));
   const span=bending.span,unsupportedEnd=!span.leftSupported||!span.rightSupported,oneSided=span.leftSupported!==span.rightSupported,spanGain=Math.max(0,span.bays-1);
@@ -2155,6 +2205,27 @@ function updateJointYielding(dt){
  for(const link of sim.memberLinks){
   const e=link.e;if(e.failed)continue;
   const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
+  if(e.isUnifiedFallingAssembly){
+   // Skip invented world-vertical joint loads while the assembly is in free fall.
+   // Only external/deformation stress can drive joint yielding in this state.
+   const stress=getUnifiedAssemblyMemberStress(link);
+   for(const [end,conn] of [['a',link.connectionA],['b',link.connectionB]]){
+    if(conn.broken)continue;
+    const ratio=clamp(Math.max(stress.utilization*1.18,Number(conn.lastDemandRatio)||0),0,4);
+    if(ratio<.86&&conn.pendingBreakUntil==null)continue;
+    const angle=Number.isFinite(conn.forceAngle)?conn.forceAngle:stress.relativeAngle;
+    const ready=conn.applyDemand(ratio,angle,dt,sim.time);
+    if(end==='a')e.jointDamageA=conn.plasticDamage;else e.jointDamageB=conn.plasticDamage;
+    if(ready){
+     const angleDeg=(angle*180/Math.PI).toFixed(0);
+     failMember(link,`FALLING-ASSEMBLY JOINT FAILURE · ${end.toUpperCase()} END · relative demand ${ratio.toFixed(2)} · angle ${angleDeg}°`);
+     sim.lastEvent=`FALLING ASSEMBLY SEPARATION · ${e.kind.toUpperCase()} ${link.key}`;
+     sim.eventUntil=sim.time+3.2;changed=true;break;
+    }
+   }
+   if(changed)break;
+   continue;
+  }
   const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y,len=Math.max(.001,Math.hypot(dx,dy)),ux=dx/len,uy=dy/len;
   const util=clamp(Number(e.utilization)||0,0,4),moment=clamp(Number(e.momentUtilization)||0,0,4),cat=clamp(Number(e.catenaryRatio)||0,0,3.2),cap=Math.max(.1,e.capacity||1),impact=clamp(Number(e.impactStress)||0,0,5);
   let verticalDemand=0,horizontalDemand=0;
