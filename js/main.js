@@ -1777,7 +1777,7 @@ function queryDebrisMemberCollisionLinks(grid,cellSize,left,right,bottom,top){
  }
  return result;
 }
-function wakeDebris(d,resetAge=false){
+function wakeDebris(d,resetAge=true){
  if(!d)return;
  d.settled=false;d.grounded=false;d.permanentSettled=false;
  d.supportType=null;d.supportId=null;d.supportT=null;
@@ -1845,6 +1845,12 @@ function settleDebrisOnMember(d,link,t,surfaceY,surfaceVx,surfaceVy){
  d.supportAnchorY=a.position.y+(b.position.y-a.position.y)*supportT;
  updateDebrisBounds(d);
  return true;
+}
+function settleDebrisPairIfResting(a,b,closingSpeed=0){
+ if(!a||!b||a===b)return false;
+ if(a.y>b.y)return settleDebrisOnDebris(a,b,-1,closingSpeed);
+ if(b.y>a.y)return settleDebrisOnDebris(b,a,1,closingSpeed);
+ return false;
 }
 function settleDebrisOnDebris(top,support,normalY,closingSpeed){
  if(!top||!support||top===support||!support.settled||Math.abs(normalY)<.70)return false;
@@ -2032,6 +2038,14 @@ async function resolveDebrisCollisions(dt){
      if((energy>Math.max(1,(b.durability||1)*.85)||b.integrity<.12)&&b.fragmentDepth<2)fragments.push([b,energy]);
     }
    }
+   // The compiled pair solver resolves impacts, while contact-to-support state
+   // remains owned by JavaScript so support chains work the same in every backend.
+   for(let p=0;p<wasmPairIndices.length/2;p++){
+    const a=live[wasmPairIndices[p*2]],b=live[wasmPairIndices[p*2+1]];
+    if(!a||!b)continue;
+    const relativeSpeed=Math.hypot(a.vx-b.vx,a.vy-b.vy);
+    settleDebrisPairIfResting(a,b,relativeSpeed);
+   }
    finishDebrisCollisionFragments(fragments);
    return;
   }
@@ -2053,8 +2067,7 @@ async function resolveDebrisCollisions(dt){
   const impactPairKey=a.id<b.id?`${a.id}:${b.id}`:`${b.id}:${a.id}`,stamp=`debris-impact:${impactPairKey}`,freshImpact=sim.time-(sim.collisionPairs[stamp]??-Infinity)>.18;if(closing>.8&&energy>.05&&freshImpact){sim.collisionPairs[stamp]=sim.time;const damageA=Math.min(.35,energy/Math.max(1,a.durability||1)*.22),damageB=Math.min(.35,energy/Math.max(1,b.durability||1)*.22);a.integrity=clamp((a.integrity??1)-damageA,0,1);b.integrity=clamp((b.integrity??1)-damageB,0,1);a.impactCount=(a.impactCount||0)+1;b.impactCount=(b.impactCount||0)+1;a.reason=a.reason||'debris collision';b.reason=b.reason||'debris collision';if((energy>Math.max(1,(a.durability||1)*.85)||a.integrity<.12)&&a.fragmentDepth<2)fragments.push([a,energy]);if((energy>Math.max(1,(b.durability||1)*.85)||b.integrity<.12)&&b.fragmentDepth<2)fragments.push([b,energy]);}
   a.vx=clamp(a.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vx=clamp(b.vx,-MAX_FALL_SPEED,MAX_FALL_SPEED);a.vy=clamp(a.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);b.vy=clamp(b.vy,-MAX_FALL_SPEED,MAX_FALL_SPEED);updateDebrisBounds(a);updateDebrisBounds(b);
   // Low-energy vertical contacts form a rubble pile, but the top piece remains linked to its support.
-  if(a.y>b.y)settleDebrisOnDebris(a,b,ny,closing);
-  else if(b.y>a.y)settleDebrisOnDebris(b,a,-ny,closing);
+  settleDebrisPairIfResting(a,b,closing);
  }
  finishDebrisCollisionFragments(fragments);
 }
