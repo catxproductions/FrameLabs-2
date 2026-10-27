@@ -173,3 +173,49 @@ test('one missing support member does not trigger folding in a strong redundant 
   assert.equal(criticalFrame.active, true,
     'a single support loss may fold the structure when remaining supports are near overload');
 });
+
+
+test('detached falling members use local demand instead of unsupported-only overload', () => {
+  const model = loadModel();
+  const strongMember = model.calculateDetachedMemberUtilization({
+    demand: 5,
+    capacity: 10,
+    integrity: 1,
+    connectionFactor: 1,
+    momentUtilization: 0.25
+  });
+  assert.equal(strongMember, 0.5,
+    'lack of a ground connection must not automatically force utilization above 100%');
+
+  const weakenedMember = model.calculateDetachedMemberUtilization({
+    demand: 5,
+    capacity: 10,
+    integrity: 0.5,
+    connectionFactor: 0.5,
+    momentUtilization: 0.25
+  });
+  assert.equal(weakenedMember, 2,
+    'actual reduced capacity must still cause overload while falling');
+
+  const overloadedBeam = model.calculateDetachedMemberUtilization({
+    demand: 2,
+    capacity: 10,
+    integrity: 1,
+    connectionFactor: 1,
+    momentUtilization: 1.25
+  });
+  assert.equal(overloadedBeam, 1.25,
+    'genuine bending demand remains able to break a detached beam');
+});
+
+test('whole-assembly rotation does not count as local column bending', () => {
+  const model = loadModel();
+  const upright = model.columnTiltRelativeToAssembly(0, 1, 0);
+  const rotatedRight = model.columnTiltRelativeToAssembly(-1, 0, Math.PI / 2);
+  const locallyBent = model.columnTiltRelativeToAssembly(-0.5, 0.866, 0);
+  assert.ok(upright < 1e-9);
+  assert.ok(rotatedRight < 1e-9,
+    'a column that rotates together with its detached frame keeps its integrity');
+  assert.ok(locallyBent > 0.4,
+    'local bending relative to the assembly still produces a failure signal');
+});
