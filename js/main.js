@@ -777,16 +777,16 @@ function buildStorySupportProfiles(){
  for(const link of sim.memberLinks){if(link.e.kind==='column')columnLinks[link.key]=link}
  for(const e of Object.values(BuildingMap.columns)){
   const level=Number(e.y)+1;if(level<1||level>NY)continue;
-  const p=profiles[level]||(profiles[level]={level,nominalCount:0,nominalCapacity:0,nominalWeightedX:0,activeSupports:[]});
+  const p=profiles[level]||(profiles[level]={level,nominalCount:0,nominalCapacity:0,nominalWeightedX:0,nominalSupports:[],activeSupports:[]});
   const nominal=Math.max(.01,Number(e.capacity)||.01),x=Number(e.x)*STORY_HEIGHT;
-  p.nominalCount++;p.nominalCapacity+=nominal;p.nominalWeightedX+=nominal*x;
+  p.nominalCount++;p.nominalCapacity+=nominal;p.nominalWeightedX+=nominal*x;p.nominalSupports.push({x,capacity:nominal,topNodeKey:keyOf(e.x,level)});
   const link=columnLinks[keyOf(e.x,e.y)];
   if(!link||!linkTransfersSupport(link))continue;
   const jointFactor=clamp(((Number(link.connectionA.stiffnessFactor)||0)+(Number(link.connectionB.stiffnessFactor)||0))*.5,.12,1);
   const utilization=Math.max(0,Number(e.utilization)||0);
   const compressionFactor=clamp(1-Math.max(0,utilization-.75)*.45,.25,1);
   const activeCapacity=nominal*clamp(Number(e.integrity??1),0,1)*jointFactor*compressionFactor;
-  if(activeCapacity>nominal*.015)p.activeSupports.push({x,capacity:activeCapacity,topNodeKey:keyOf(e.x,level)});
+  if(activeCapacity>nominal*.015)p.activeSupports.push({x,capacity:activeCapacity,topNodeKey:keyOf(e.x,level),utilization});
  }
  for(const p of Object.values(profiles))p.nominalCenter=p.nominalCapacity>0?p.nominalWeightedX/p.nominalCapacity:0;
  return profiles;
@@ -796,15 +796,29 @@ function calculateInternalFoldDynamics(assembly,dt,profiles){
  let best=null,priorCandidate=null;
  for(const profile of Object.values(profiles)){
   const level=profile.level;
-  if(profile.nominalCount<2||profile.nominalCapacity<=0)continue;
-  const supports=profile.activeSupports.filter(s=>assembly.nodeKeys.has(s.topNodeKey));
+  // Compare this assembly only with the supports that originally belonged
+  // to it. Using every column on the story incorrectly made isolated fragments
+  // look as if most of their supports had disappeared.
+  const nominalSupports=(profile.nominalSupports||[]).filter(s=>assembly.nodeKeys.has(s.topNodeKey));
+  if(nominalSupports.length<2)continue;
+  const nominalCapacity=nominalSupports.reduce((sum,s)=>sum+s.capacity,0);
+  if(nominalCapacity<=0)continue;
+  const nominalCenter=nominalSupports.reduce((sum,s)=>sum+s.x*s.capacity,0)/nominalCapacity;
+  const nominalNodeKeys=new Set(nominalSupports.map(s=>s.topNodeKey));
+  const supports=profile.activeSupports.filter(s=>nominalNodeKeys.has(s.topNodeKey));
   if(!supports.length)continue;
   const activeCapacity=supports.reduce((sum,s)=>sum+s.capacity,0);
   if(activeCapacity<=0)continue;
   const activeCenter=supports.reduce((sum,s)=>sum+s.x*s.capacity,0)/activeCapacity;
-  const supportLoss=clamp(1-activeCapacity/profile.nominalCapacity,0,1);
-  const supportCenterShift=activeCenter-profile.nominalCenter;
-  if(supportLoss<.10||Math.abs(supportCenterShift)<STORY_HEIGHT*.025)continue;
+  const supportLoss=clamp(1-activeCapacity/nominalCapacity,0,1);
+  const supportCenterShift=activeCenter-nominalCenter;
+  const lostSupportCount=Math.max(0,nominalSupports.length-supports.length);
+  const maxSupportUtilization=supports.reduce((peak,s)=>Math.max(peak,Number(s.utilization)||0),0);
+  // Do not fold because one member disappears in an otherwise strong frame.
+  // Require material support loss and imbalance, then at least two unavailable
+  // supports or surviving supports close to their overload limit.
+  if(supportLoss<.28||Math.abs(supportCenterShift)<STORY_HEIGHT*.10||
+     (lostSupportCount<2&&maxSupportUtilization<.90))continue;
   const upperElements=(assembly.massElements||[]).filter(element=>Number(element.level)>=level);
   if(!upperElements.length)continue;
   const upper=PHYSICS_MODEL?.calculateMassProperties2D?.(upperElements);
@@ -816,7 +830,7 @@ function calculateInternalFoldDynamics(assembly,dt,profiles){
   const pivotMass=PHYSICS_MODEL.calculateMassProperties2D(upperElements,{x:pivotX,y:pivotY});
   const response=PHYSICS_MODEL.calculateFoldResponse({
    mass:upper.mass,comX:upper.comX,pivotX,inertia:pivotMass.inertiaAboutPivot,
-   supportLoss,supportCenterShift,storyWidth:STORY_HEIGHT,gravity:GRAVITY
+   supportLoss,supportCenterShift,lostSupportCount,maxSupportUtilization,storyWidth:STORY_HEIGHT,gravity:GRAVITY
   });
   if(!response.active)continue;
   const candidate={level,pivotX,pivotY,severity:response.severity,torque:response.torque,
