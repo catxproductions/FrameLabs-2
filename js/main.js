@@ -740,16 +740,16 @@ function calculateStability(analysis){
  for(const link of links){if(!linkTransfersSupport(link))continue;adj[link.nodeA]?.push(link.nodeB);adj[link.nodeB]?.push(link.nodeA)}
  for(const start of nodeKeys){if(nodeAssembly[start])continue;const keys=[],queue=[start],id=`asm:${start}`;nodeAssembly[start]=id;for(let head=0;head<queue.length;head++){const key=queue[head];keys.push(key);for(const next of adj[key]||[])if(!nodeAssembly[next]){nodeAssembly[next]=id;queue.push(next)}}components.push({id,nodeKeys:new Set(keys),members:[],memberIds:new Set(),mass:0,weightedX:0,weightedY:0,massElements:[],supportPoints:[]})}
  const byId=Object.create(null);for(const c of components)byId[c.id]=c;
- const addMass=(c,m,x,y,intrinsicInertia=0)=>{if(!c||!Number.isFinite(m)||m<=0||!Number.isFinite(x)||!Number.isFinite(y))return;c.mass+=m;c.weightedX+=m*x;c.weightedY+=m*y;c.massElements.push({mass:m,x,y,intrinsicInertia:Math.max(0,Number(intrinsicInertia)||0)})};
+ const addMass=(c,m,x,y,intrinsicInertia=0,level=0)=>{if(!c||!Number.isFinite(m)||m<=0||!Number.isFinite(x)||!Number.isFinite(y))return;c.mass+=m;c.weightedX+=m*x;c.weightedY+=m*y;c.massElements.push({mass:m,x,y,level:Number.isFinite(Number(level))?Number(level):0,intrinsicInertia:Math.max(0,Number(intrinsicInertia)||0)})};
  // Each member's mass is assigned to the connected assembly at its intact end(s).
- for(const link of links){const e=link.e;if(e.failed||e.integrity<=.02)continue;const aId=nodeAssembly[link.nodeA],bId=nodeAssembly[link.nodeB],aAlive=!link.connectionA.broken,bAlive=!link.connectionB.broken,a=nodes[link.nodeA],b=nodes[link.nodeB];if(!a||!b)continue;const m=Math.max(.01,e.mass);if(e.snapped){const ca=byId[aId],cb=byId[bId];if(ca&&ca===cb){addMass(ca,m*.5,a.position.x,a.position.y);addMass(ca,m*.5,b.position.x,b.position.y)}else{if(ca)addMass(ca,m*.5,a.position.x,a.position.y);if(cb)addMass(cb,m*.5,b.position.x,b.position.y)}continue}let target=null;if(aAlive&&bAlive&&aId===bId)target=byId[aId];else if(aAlive)target=byId[aId];else if(bAlive)target=byId[bId];if(!target)continue;const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y,centroidX=(a.position.x+b.position.x)*.5,centroidY=(a.position.y+b.position.y)*.5;addMass(target,m,centroidX,centroidY,m*(dx*dx+dy*dy)/12);target.members.push(link);target.memberIds.add(link.id)}
+ for(const link of links){const e=link.e;if(e.failed||e.integrity<=.02)continue;const aId=nodeAssembly[link.nodeA],bId=nodeAssembly[link.nodeB],aAlive=!link.connectionA.broken,bAlive=!link.connectionB.broken,a=nodes[link.nodeA],b=nodes[link.nodeB];if(!a||!b)continue;const m=Math.max(.01,e.mass);if(e.snapped){const ca=byId[aId],cb=byId[bId];if(ca&&ca===cb){addMass(ca,m*.5,a.position.x,a.position.y,0,a.referenceLevel);addMass(ca,m*.5,b.position.x,b.position.y,0,b.referenceLevel)}else{if(ca)addMass(ca,m*.5,a.position.x,a.position.y,0,a.referenceLevel);if(cb)addMass(cb,m*.5,b.position.x,b.position.y,0,b.referenceLevel)}continue}let target=null;if(aAlive&&bAlive&&aId===bId)target=byId[aId];else if(aAlive)target=byId[aId];else if(bAlive)target=byId[bId];if(!target)continue;const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y,centroidX=(a.position.x+b.position.x)*.5,centroidY=(a.position.y+b.position.y)*.5;addMass(target,m,centroidX,centroidY,m*(dx*dx+dy*dy)/12,Math.min(a.referenceLevel,b.referenceLevel));target.members.push(link);target.memberIds.add(link.id)}
  // Loads contribute at their actual bay centre, split between disconnected endpoint assemblies when needed.
- for(const load of Object.values(BuildingMap.loads)){if(load.failed||load.integrity<=.02)continue;const a=nodes[keyOf(load.x,load.y)],b=nodes[keyOf(load.x+1,load.y)];if(!a&&!b)continue;const aId=a?nodeAssembly[a.key]:null,bId=b?nodeAssembly[b.key]:null,ca=aId?byId[aId]:null,cb=bId?byId[bId]:null,m=Math.max(.01,load.mass);if(ca&&ca===cb)addMass(ca,m,(a.position.x+b.position.x)*.5,(a.position.y+b.position.y)*.5,m*STORY_HEIGHT*STORY_HEIGHT/12);else if(ca&&cb){addMass(ca,m*.5,a.position.x,a.position.y);addMass(cb,m*.5,b.position.x,b.position.y)}else if(ca)addMass(ca,m,(a.position.x+(b?.position.x??a.position.x))*.5,(a.position.y+(b?.position.y??a.position.y))*.5);else if(cb)addMass(cb,m,((a?.position.x??b.position.x)+b.position.x)*.5,((a?.position.y??b.position.y)+b.position.y)*.5)}
+ for(const load of Object.values(BuildingMap.loads)){if(load.failed||load.integrity<=.02)continue;const a=nodes[keyOf(load.x,load.y)],b=nodes[keyOf(load.x+1,load.y)];if(!a&&!b)continue;const aId=a?nodeAssembly[a.key]:null,bId=b?nodeAssembly[b.key]:null,ca=aId?byId[aId]:null,cb=bId?byId[bId]:null,m=Math.max(.01,load.mass);if(ca&&ca===cb)addMass(ca,m,(a.position.x+b.position.x)*.5,(a.position.y+b.position.y)*.5,m*STORY_HEIGHT*STORY_HEIGHT/12,load.y);else if(ca&&cb){addMass(ca,m*.5,a.position.x,a.position.y,0,load.y);addMass(cb,m*.5,b.position.x,b.position.y,0,load.y)}else if(ca)addMass(ca,m,(a.position.x+(b?.position.x??a.position.x))*.5,(a.position.y+(b?.position.y??a.position.y))*.5,0,load.y);else if(cb)addMass(cb,m,((a?.position.x??b.position.x)+b.position.x)*.5,((a?.position.y??b.position.y)+b.position.y)*.5,0,load.y)}
  // Only an intact base column with both end joints intact counts as a foundation contact.
  for(const link of links){const e=link.e;if(e.kind!=='column'||e.y!==0||e.failed||e.integrity<=.02||link.connectionA.broken||link.connectionB.broken)continue;const c=byId[nodeAssembly[link.nodeB]],base=nodes[link.nodeA];if(c&&base)c.supportPoints.push({x:base.position.x,capacity:Math.max(.01,e.capacity*e.integrity),memberId:link.id})}
  const previous=sim.assemblyDynamics||Object.create(null),nextDynamics=Object.create(null),assemblies=[];
  for(const c of components){
-  if(c.mass<=.001){for(const key of c.nodeKeys){const n=nodes[key];if(n)addMass(c,Math.max(.005,n.mass||.005),n.position.x,n.position.y)}}
+  if(c.mass<=.001){for(const key of c.nodeKeys){const n=nodes[key];if(n)addMass(c,Math.max(.005,n.mass||.005),n.position.x,n.position.y,0,n.referenceLevel)}}
   const massProperties=PHYSICS_MODEL?.calculateMassProperties2D?.(c.massElements||[])||null;c.comX=massProperties?.comX??(c.mass?c.weightedX/c.mass:0);c.comY=massProperties?.comY??(c.mass?c.weightedY/c.mass:0);c.totalMass=Math.max(.01,massProperties?.mass??c.mass);c.supportPoints=c.supportPoints.filter((p,i,arr)=>arr.findIndex(q=>Math.abs(q.x-p.x)<.01)===i).sort((a,b)=>a.x-b.x);
   c.minSupportX=c.supportPoints.length?Math.min(...c.supportPoints.map(p=>p.x)):null;c.maxSupportX=c.supportPoints.length?Math.max(...c.supportPoints.map(p=>p.x)):null;
   c.withinBase=isCoMWithinBase(c.comX,c.supportPoints);c.outside=c.supportPoints.length===0||!c.withinBase;c.isFloating=c.supportPoints.length===0&&c.members.length>0&&[...c.nodeKeys].some(key=>!nodes[key]?.isGroundConnected);
@@ -761,7 +761,7 @@ function calculateStability(analysis){
   c.stabilityMetric=c.supportPoints.length>1?clamp((2*c.marginWorld/Math.max(.01,c.maxSupportX-c.minSupportX))*100,0,100):c.supportPoints.length===1?clamp((1-Math.abs(c.comX-c.supportPoints[0].x)/(STORY_HEIGHT*.5))*100,0,100):0;
   // Moment of inertia uses member and load masses already accumulated into the assembly CoM.
   const pivotProperties=PHYSICS_MODEL?.calculateMassProperties2D?.(c.massElements||[],{x:c.pivotX,y:c.pivotY})||massProperties;c.momentOfInertiaCOM=Math.max(.25,Number(pivotProperties?.inertiaAboutCOM)||0);const parallelAxisFallback=c.momentOfInertiaCOM+c.totalMass*((c.comX-c.pivotX)**2+(c.comY-c.pivotY)**2);c.momentOfInertia=Math.max(.25,Number(pivotProperties?.inertiaAboutPivot)||parallelAxisFallback);
-  c.key=`${[...c.nodeKeys].sort().join('|')}`;let dyn=previous[c.key];if(!dyn){let overlapBest=0;for(const old of Object.values(previous)){const oldKeys=old.nodeKeys instanceof Set?old.nodeKeys:new Set(old.nodeKeys||[]);let overlap=0;for(const k of c.nodeKeys)if(oldKeys.has(k))overlap++;if(overlap>overlapBest){overlapBest=overlap;dyn=old}}}dyn={rotation:Number(dyn?.rotation)||0,angularVelocity:Number(dyn?.angularVelocity)||0,angularAcceleration:Number(dyn?.angularAcceleration)||0,torque:Number(dyn?.torque)||0,isRotating:!!dyn?.isRotating,pivotX:c.pivotX,pivotY:0,momentOfInertiaCOM:c.momentOfInertiaCOM,momentOfInertia:c.momentOfInertia,nodeKeys:new Set(c.nodeKeys)};dyn.pivotX=c.pivotX;dyn.pivotY=0;dyn.momentOfInertiaCOM=c.momentOfInertiaCOM;dyn.momentOfInertia=c.momentOfInertia;c.dynamics=dyn;if(!c.shouldTip&&Math.abs(dyn.rotation)>.01)c.tippingDirection=dyn.rotation<0?'right':'left';nextDynamics[c.key]=dyn;for(const key of c.nodeKeys)nodeAssembly[key]=c.key;c.id=c.key;assemblies.push(c);byId[c.key]=c;
+  c.key=`${[...c.nodeKeys].sort().join('|')}`;let dyn=previous[c.key];if(!dyn){let overlapBest=0;for(const old of Object.values(previous)){const oldKeys=old.nodeKeys instanceof Set?old.nodeKeys:new Set(old.nodeKeys||[]);let overlap=0;for(const k of c.nodeKeys)if(oldKeys.has(k))overlap++;if(overlap>overlapBest){overlapBest=overlap;dyn=old}}}dyn={rotation:Number(dyn?.rotation)||0,angularVelocity:Number(dyn?.angularVelocity)||0,angularAcceleration:Number(dyn?.angularAcceleration)||0,torque:Number(dyn?.torque)||0,isRotating:!!dyn?.isRotating,foldHinge:dyn?.foldHinge||null,pivotX:c.pivotX,pivotY:0,momentOfInertiaCOM:c.momentOfInertiaCOM,momentOfInertia:c.momentOfInertia,nodeKeys:new Set(c.nodeKeys)};dyn.pivotX=c.pivotX;dyn.pivotY=0;dyn.momentOfInertiaCOM=c.momentOfInertiaCOM;dyn.momentOfInertia=c.momentOfInertia;c.dynamics=dyn;if(!c.shouldTip&&Math.abs(dyn.rotation)>.01)c.tippingDirection=dyn.rotation<0?'right':'left';nextDynamics[c.key]=dyn;for(const key of c.nodeKeys)nodeAssembly[key]=c.key;c.id=c.key;assemblies.push(c);byId[c.key]=c;
  }
  sim.assemblyDynamics=nextDynamics;sim.stability={assemblies,primary:null,nodeAssembly,byId};
  const eligible=assemblies.filter(c=>c.members.length||c.supportPoints.length).sort((a,b)=>{const ar=a.supportPoints.length?1:0,br=b.supportPoints.length?1:0;if(ar!==br)return br-ar;return b.totalMass-a.totalMass});
@@ -772,14 +772,87 @@ function calculateStability(analysis){
   for(const link of c.members){const e=link.e,base=Number(e.utilization)||0;e.dynamicUtilization=base*multiplier+(dyn.isRotating?Math.min(1.5,Math.abs(dyn.angularVelocity)*.12):0);if(e.dynamicUtilization>base){e.utilization=Math.max(base,e.dynamicUtilization);if(analysis){analysis.maxUtil=Math.max(analysis.maxUtil,e.utilization);if(base<=1&&e.utilization>1)analysis.overloaded++}}}
  }
 }
+function buildStorySupportProfiles(){
+ const profiles=Object.create(null),columnLinks=Object.create(null);
+ for(const link of sim.memberLinks){if(link.e.kind==='column')columnLinks[link.key]=link}
+ for(const e of Object.values(BuildingMap.columns)){
+  const level=Number(e.y)+1;if(level<1||level>NY)continue;
+  const p=profiles[level]||(profiles[level]={level,nominalCount:0,nominalCapacity:0,nominalWeightedX:0,activeSupports:[]});
+  const nominal=Math.max(.01,Number(e.capacity)||.01),x=Number(e.x)*STORY_HEIGHT;
+  p.nominalCount++;p.nominalCapacity+=nominal;p.nominalWeightedX+=nominal*x;
+  const link=columnLinks[keyOf(e.x,e.y)];
+  if(!link||!linkTransfersSupport(link))continue;
+  const jointFactor=clamp(((Number(link.connectionA.stiffnessFactor)||0)+(Number(link.connectionB.stiffnessFactor)||0))*.5,.12,1);
+  const utilization=Math.max(0,Number(e.utilization)||0);
+  const compressionFactor=clamp(1-Math.max(0,utilization-.75)*.45,.25,1);
+  const activeCapacity=nominal*clamp(Number(e.integrity??1),0,1)*jointFactor*compressionFactor;
+  if(activeCapacity>nominal*.015)p.activeSupports.push({x,capacity:activeCapacity,topNodeKey:keyOf(e.x,level)});
+ }
+ for(const p of Object.values(profiles))p.nominalCenter=p.nominalCapacity>0?p.nominalWeightedX/p.nominalCapacity:0;
+ return profiles;
+}
+function calculateInternalFoldDynamics(assembly,dt,profiles){
+ const dyn=assembly?.dynamics;if(!dyn)return;
+ let best=null,priorCandidate=null;
+ for(const profile of Object.values(profiles)){
+  const level=profile.level;
+  if(profile.nominalCount<2||profile.nominalCapacity<=0)continue;
+  const supports=profile.activeSupports.filter(s=>assembly.nodeKeys.has(s.topNodeKey));
+  if(!supports.length)continue;
+  const activeCapacity=supports.reduce((sum,s)=>sum+s.capacity,0);
+  if(activeCapacity<=0)continue;
+  const activeCenter=supports.reduce((sum,s)=>sum+s.x*s.capacity,0)/activeCapacity;
+  const supportLoss=clamp(1-activeCapacity/profile.nominalCapacity,0,1);
+  const supportCenterShift=activeCenter-profile.nominalCenter;
+  if(supportLoss<.10||Math.abs(supportCenterShift)<STORY_HEIGHT*.025)continue;
+  const upperElements=(assembly.massElements||[]).filter(element=>Number(element.level)>=level);
+  if(!upperElements.length)continue;
+  const upper=PHYSICS_MODEL?.calculateMassProperties2D?.(upperElements);
+  if(!upper||upper.mass<.05)continue;
+  const direction=-Math.sign(supportCenterShift);
+  const xs=supports.map(s=>s.x);
+  const pivotX=direction>0?Math.min(...xs):Math.max(...xs);
+  const pivotY=level*STORY_HEIGHT;
+  const pivotMass=PHYSICS_MODEL.calculateMassProperties2D(upperElements,{x:pivotX,y:pivotY});
+  const response=PHYSICS_MODEL.calculateFoldResponse({
+   mass:upper.mass,comX:upper.comX,pivotX,inertia:pivotMass.inertiaAboutPivot,
+   supportLoss,supportCenterShift,storyWidth:STORY_HEIGHT,gravity:GRAVITY
+  });
+  if(!response.active)continue;
+  const candidate={level,pivotX,pivotY,severity:response.severity,torque:response.torque,
+   angularAcceleration:response.angularAcceleration,upperMass:upper.mass,
+   momentOfInertia:Math.max(.25,pivotMass.inertiaAboutPivot),score:Math.abs(response.torque)};
+  if(dyn.foldHinge?.level===level)priorCandidate=candidate;
+  if(!best||candidate.score>best.score)best=candidate;
+ }
+ // Keep the current hinge unless another story has a meaningfully stronger moment;
+ // this avoids the fold pivot jumping between floors as member damage evolves.
+ if(priorCandidate&&best&&priorCandidate.score>=best.score*.72)best=priorCandidate;
+ const previous=dyn.foldHinge;
+ if(best){
+  const fold=previous&&previous.level===best.level?previous:{rotation:0,angularVelocity:0,angularAcceleration:0,torque:0,isRotating:false};
+  Object.assign(fold,best);
+  fold.angularVelocity=clamp((Number(fold.angularVelocity)||0)+fold.angularAcceleration*dt,-2.4,2.4);
+  fold.rotation=(Number(fold.rotation)||0)+fold.angularVelocity*dt;
+  fold.isRotating=fold.severity>=.08&&(Math.abs(fold.angularAcceleration)>.004||Math.abs(fold.angularVelocity)>.008);
+  dyn.foldHinge=fold;
+ }else if(previous){
+  previous.angularAcceleration=0;previous.torque=0;
+  previous.angularVelocity=(Number(previous.angularVelocity)||0)*Math.exp(-ROTATION_DAMPING*dt);
+  previous.severity=(Number(previous.severity)||0)*Math.exp(-1.25*dt);
+  previous.isRotating=previous.severity>.04&&Math.abs(previous.angularVelocity)>.008;
+  if(!previous.isRotating)dyn.foldHinge=null;
+ }
+}
 function calculateCollapseDynamics(assembly,dt){
  const dyn=assembly.dynamics;if(!dyn)return;dyn.pivotX=assembly.pivotX;dyn.pivotY=0;dyn.momentOfInertiaCOM=assembly.momentOfInertiaCOM;dyn.momentOfInertia=assembly.momentOfInertia;
- if(assembly.shouldTip){const leverArm=assembly.comX-assembly.pivotX;dyn.torque=-leverArm*assembly.totalMass*GRAVITY;dyn.angularAcceleration=clamp(dyn.torque/Math.max(.25,dyn.momentOfInertia),-4,4);dyn.isRotating=true;}
+ const foldShare=dyn.foldHinge?.isRotating?1-.65*clamp(Number(dyn.foldHinge.severity)||0,0,1):1;
+ if(assembly.shouldTip){const leverArm=assembly.comX-assembly.pivotX;dyn.torque=-leverArm*assembly.totalMass*GRAVITY*foldShare;dyn.angularAcceleration=clamp(dyn.torque/Math.max(.25,dyn.momentOfInertia),-4,4);dyn.isRotating=true;}
  else{dyn.torque=0;dyn.angularAcceleration=0;dyn.angularVelocity*=Math.exp(-ROTATION_DAMPING*dt);if(Math.abs(dyn.angularVelocity)<.008&&Math.abs(dyn.rotation)<.006){dyn.angularVelocity=0;dyn.rotation=0;dyn.isRotating=false}}
  dyn.angularVelocity=clamp(dyn.angularVelocity+dyn.angularAcceleration*dt,-2.8,2.8);dyn.rotation+=dyn.angularVelocity*dt;
  if(Math.abs(dyn.rotation)>CRITICAL_TILT&&assembly.members.length&&sim.time>=sim.eventUntil-.04){sim.lastEvent=`OVERTURNING INSTABILITY · ${assembly.tippingDirection.toUpperCase()}`;sim.eventUntil=sim.time+2.5}
 }
-function updateStabilityDynamics(dt){calculateStability(lastAnalysis||analyzeStructure());for(const assembly of sim.stability.assemblies)calculateCollapseDynamics(assembly,dt)}
+function updateStabilityDynamics(dt){calculateStability(lastAnalysis||analyzeStructure());const supportProfiles=buildStorySupportProfiles();for(const assembly of sim.stability.assemblies){calculateCollapseDynamics(assembly,dt);calculateInternalFoldDynamics(assembly,dt,supportProfiles)}}
 let lastParallelScanAt=0,parallelScanBusy=false,parallelScanSignature='';
 function scheduleParallelComputeScan(force=false){
  if(!window.FrameLabCompute||parallelScanBusy)return;
@@ -1588,11 +1661,11 @@ async function updateMemberPhysics(dt){
  for(const node of Object.values(sim.nodes)){
   previousY[node.key]=node.position.y;
   if(node.referenceLevel===0){node.position.x=node.reference.x;node.position.y=0;node.velocity.x=0;node.velocity.y=0;node.acceleration.x=0;node.acceleration.y=0;continue;}
-  const assembly=byId[nodeAssembly[node.key]],dyn=assembly?.dynamics,rotating=!!(dyn&&dyn.isRotating&&assembly.supportPoints.length),directVerticalSupport=hasDirectVerticalSupport(node);
+  const assembly=byId[nodeAssembly[node.key]],dyn=assembly?.dynamics,fold=dyn?.foldHinge,rotating=!!(dyn&&dyn.isRotating&&assembly.supportPoints.length),folding=!!(fold?.isRotating&&node.referenceLevel>=fold.level),directVerticalSupport=hasDirectVerticalSupport(node);
   const cantileverUtil=node.isGroundConnected&&!directVerticalSupport?cantileverUtilizationAtNode(node):null,cantileverSupported=cantileverUtil!==null,isTetheredNode=gravityTether?.kind==='node'&&gravityTether.nodeKey===node.key,tetherForce=isTetheredNode?springForce(gravityTether.targetX,gravityTether.targetY,node.position.x,node.position.y,node.velocity.x,node.velocity.y,34):{x:0,y:0},nodeSubmerged=ENVIRONMENT.waterLevel>0&&PHYSICS_MODEL?PHYSICS_MODEL.submergedFraction(node.position.y-.10,node.position.y+.10,waterSurfaceWorld()):0,nodeDensityValue=nodeDensity[node.key]?.mass?nodeDensity[node.key].weighted/nodeDensity[node.key].mass:2,nodeBuoyancy=GRAVITY*nodeSubmerged/Math.max(.3,nodeDensityValue),mediumDrag=.018+nodeSubmerged*1.25,windHeight=clamp(node.referenceLevel/Math.max(1,NY),0,1),windAx=windDirection*windRatio*windRatio*windGust*(.16+1.05*windHeight);
   // Keep ordinary two-sided frames pinned to their structural reference unless the node lies
   // on a genuine one-sided overhang. Its spring-like lateral settling still runs through the compute backend.
-  if(node.isGroundConnected&&!rotating&&!cantileverSupported&&!isTetheredNode){
+  if(node.isGroundConnected&&!rotating&&!folding&&!cantileverSupported&&!isTetheredNode){
    node.acceleration.x=-2.4*(node.position.x-node.reference.x)-1.15*node.velocity.x+windAx+(snapForces[node.key]||0);
    node.acceleration.y=0;
    motionNodes.push({node,pinned:true,ax:node.acceleration.x,ay:0,alpha:0,damping:1,maxVX:5,maxVY:MAX_FALL_SPEED,maxOmega:3.4});
@@ -1603,11 +1676,17 @@ async function updateMemberPhysics(dt){
   node.acceleration.x=-.22*node.velocity.x+windAx+(snapForces[node.key]||0)-mediumDrag*node.velocity.x+clamp(tetherForce.x/Math.max(.12,node.mass),-18,18);
   node.acceleration.y=(directVerticalSupport?0:-GRAVITY*cantileverGravity)+nodeBuoyancy-mediumDrag*node.velocity.y-(sagVertical[node.key]||0)+clamp(tetherForce.y/Math.max(.12,node.mass),-18,18);
   if(rotating){
-   // Angular acceleration creates tangential motion; angular velocity adds
-   // centripetal acceleration so impact torque also produces visible rotation.
+   // Whole-assembly overturning about its foundation.
    const rx=node.position.x-dyn.pivotX,ry=node.position.y-dyn.pivotY;
    node.acceleration.x+=-dyn.angularAcceleration*ry-dyn.angularVelocity*dyn.angularVelocity*rx;
    node.acceleration.y+=dyn.angularAcceleration*rx-dyn.angularVelocity*dyn.angularVelocity*ry;
+  }
+  if(folding){
+   // A damaged story becomes a local hinge: the upper block rotates around
+   // the surviving support on the side opposite the weakened support line.
+   const rx=node.position.x-fold.pivotX,ry=node.position.y-fold.pivotY;
+   node.acceleration.x+=-fold.angularAcceleration*ry-fold.angularVelocity*fold.angularVelocity*rx;
+   node.acceleration.y+=fold.angularAcceleration*rx-fold.angularVelocity*fold.angularVelocity*ry;
   }
   motionNodes.push({node,pinned:false,ax:node.acceleration.x,ay:node.acceleration.y,alpha:0,damping:1,maxVX:5,maxVY:MAX_FALL_SPEED,maxOmega:3.4});
  }
