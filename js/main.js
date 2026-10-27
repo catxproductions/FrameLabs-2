@@ -1777,6 +1777,7 @@ function queryDebrisMemberCollisionLinks(grid,cellSize,left,right,bottom,top){
  }
  return result;
 }
+let DEBRIS_SUPPORT_LINK_INDEX=new Map(),DEBRIS_BY_ID=new Map();
 function wakeDebris(d,resetAge=true){
  if(!d)return;
  d.settled=false;d.grounded=false;d.permanentSettled=false;
@@ -1798,7 +1799,7 @@ function debrisRestingSupportIsStable(d,byId,visiting=new Set()){
  visiting.add(d.id);
  let stable=false;
  if(d.supportType==='member'){
-  const link=sim.memberLinks.find(item=>item.id===d.supportId);
+  const link=DEBRIS_SUPPORT_LINK_INDEX.get(d.supportId);
   if(memberSurfaceSupportsDebris(link)){
    const t=clamp(Number(d.supportT)||0,0,1),a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];
    const x=a.position.x+(b.position.x-a.position.x)*t,y=a.position.y+(b.position.y-a.position.y)*t;
@@ -1818,8 +1819,9 @@ function debrisRestingSupportIsStable(d,byId,visiting=new Set()){
  return stable;
 }
 function refreshDebrisRestingStates(){
- const byId=new Map(sim.debris.map(d=>[d.id,d]));
- for(const d of sim.debris)if(d.settled&&!debrisRestingSupportIsStable(d,byId))wakeDebris(d,true);
+ DEBRIS_BY_ID=new Map(sim.debris.map(d=>[d.id,d]));
+ DEBRIS_SUPPORT_LINK_INDEX=new Map(sim.memberLinks.map(link=>[link.id,link]));
+ for(const d of sim.debris)if(d.settled&&!debrisRestingSupportIsStable(d,DEBRIS_BY_ID))wakeDebris(d,true);
 }
 function canRestOnSurface(relativeSpeed,relativeHorizontalSpeed,angularSpeed,d,surfaceSupported,onSimulationGround=false){
  if(PHYSICS_MODEL?.canDebrisSettle){
@@ -1854,8 +1856,7 @@ function settleDebrisPairIfResting(a,b,closingSpeed=0){
 }
 function settleDebrisOnDebris(top,support,normalY,closingSpeed){
  if(!top||!support||top===support||!support.settled||Math.abs(normalY)<.70)return false;
- const byId=new Map(sim.debris.map(d=>[d.id,d]));
- if(!debrisRestingSupportIsStable(support,byId))return false;
+ if(!debrisRestingSupportIsStable(support,DEBRIS_BY_ID))return false;
  const topWasAbove=top.y>support.y;
  if((topWasAbove&&normalY>=-.70)||(!topWasAbove&&normalY<=.70))return false;
  updateDebrisBounds(top);updateDebrisBounds(support);
@@ -1965,6 +1966,7 @@ async function updateDebris(dt){
   }
   if(Math.abs(d.x)>NX*STORY_HEIGHT*1.8){d.x=clamp(d.x,-NX*STORY_HEIGHT*.5,NX*STORY_HEIGHT*1.5);d.vx*=-.25}
  }
+ DEBRIS_BY_ID=new Map(sim.debris.map(d=>[d.id,d]));
  await resolveDebrisCollisions(dt);for(const d of sim.debris)containDebrisInGrid(d);
 }
 function debrisProjectionRadius(d,axisX,axisY){const ux=Math.cos(d.angle),uy=Math.sin(d.angle),vx=-uy,vy=ux;return Math.abs(ux*axisX+uy*axisY)*d.length*.5+Math.abs(vx*axisX+vy*axisY)*d.thickness*.5}
@@ -2026,6 +2028,7 @@ async function resolveDebrisCollisions(dt){
     const a=live[wasmPairIndices[p*2]],b=live[wasmPairIndices[p*2+1]];
     if(!a||!b)continue;
     const closing=wasmResult.events[row+2],energy=wasmResult.events[row+3];
+    if(closing>.30){if(a.settled)wakeDebris(a);if(b.settled)wakeDebris(b)}
     const pairKey=(a.id<b.id?a.id+':'+b.id:b.id+':'+a.id),stamp='debris-impact:'+pairKey;
     const freshImpact=sim.time-(sim.collisionPairs[stamp]??-Infinity)>.18;
     if(closing>.8&&energy>.05&&freshImpact){
