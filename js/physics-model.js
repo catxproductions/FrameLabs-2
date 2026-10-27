@@ -130,6 +130,49 @@
     };
   }
 
+
+  // Model a partial-story collapse as a hinge around the surviving support
+  // on the opposite side of a damaged support line. centerShift is
+  // active-support COM minus nominal-support COM; its sign identifies the weak side.
+  function calculateFoldResponse({
+    mass = 0, comX = 0, pivotX = 0, inertia = 0,
+    supportLoss = 0, supportCenterShift = 0,
+    storyWidth = 3.15, gravity = 9.81
+  } = {}) {
+    const totalMass = Math.max(0, finite(mass));
+    const center = finite(comX);
+    const pivot = finite(pivotX);
+    const lost = clamp(finite(supportLoss), 0, 1);
+    const shift = finite(supportCenterShift);
+    const bay = Math.max(0.1, finite(storyWidth, 3.15));
+    const g = Math.max(0, finite(gravity, 9.81));
+    const shiftMagnitude = Math.abs(shift);
+
+    if (totalMass <= 0 || lost < 0.10 || shiftMagnitude < bay * 0.025) {
+      return {
+        active: false, direction: 0, severity: 0,
+        torque: 0, angularAcceleration: 0
+      };
+    }
+
+    const imbalance = clamp(shiftMagnitude / (bay * 0.65), 0, 1);
+    const severity = clamp(lost * 0.62 + imbalance * 0.48, 0, 1);
+    const torque = -(center - pivot) * totalMass * g * severity;
+    const angularAcceleration = clamp(
+      torque / Math.max(0.25, finite(inertia, 0.25)),
+      -4, 4
+    );
+
+    return {
+      active: severity >= 0.08 && Number.isFinite(torque),
+      // Positive direction means the upper block folds toward the right.
+      direction: -Math.sign(shift),
+      severity,
+      torque,
+      angularAcceleration
+    };
+  }
+
   function chooseQualityTier({ cpuMs = 8, cores = 4, memoryGB = 4, gpuExpected = false, gpuMs = null } = {}) {
     const cpu = Math.max(0, finite(cpuMs, 8));
     const hwCores = Math.max(1, finite(cores, 4));
@@ -155,6 +198,7 @@
     environmentAcceleration,
     windMemberDemand,
     calculateMassProperties2D,
+    calculateFoldResponse,
     chooseQualityTier,
     shadeForMoisture
   });
