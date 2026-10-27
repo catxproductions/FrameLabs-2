@@ -721,7 +721,24 @@ function analyzeStructure(){
   const liveEnds=ends.filter(k=>sim.nodes[k]?.isGroundConnected).length;brace.unsupported=liveEnds===0;brace.utilization=brace.demand/Math.max(.01,brace.capacity*brace.integrity*Math.max(.18,brace.connectionFactor||1));if(brace.unsupported)brace.utilization=Math.max(brace.utilization,.72);
   brace.isLoaded=brace.demand>.02;brace.isStressed=brace.utilization>.8;maxUtil=Math.max(maxUtil,brace.utilization);if(brace.utilization>1)overloaded++;
  }
+ // A free-falling connected frame has no ground load path by definition.
+ // Do not turn that condition into fake member overload: calculate stress from
+ // each member's actual demand/capacity and bending, while impact and joint
+ // damage continue through their normal failure paths.
+ for(const link of sim.memberLinks){
+  const e=link.e;if(!e.isFreefalling||e.failed||e.snapped)continue;
+  const localUtilization=PHYSICS_MODEL?.calculateDetachedMemberUtilization?.({
+   demand:e.demand,capacity:e.capacity,integrity:e.integrity,
+   connectionFactor:e.connectionFactor,momentUtilization:e.kind==='beam'?e.momentUtilization:0
+  });
+  const capacity=Math.max(.01,Math.max(0,Number(e.capacity)||0)*clamp(Number(e.integrity??1),0,1)*Math.max(.18,Number(e.connectionFactor)||1));
+  e.utilization=Number.isFinite(localUtilization)?localUtilization:Math.max(Math.max(0,Number(e.demand)||0)/capacity,e.kind==='beam'?Math.max(0,Number(e.momentUtilization)||0):0);
+  e.dynamicUtilization=e.utilization;
+ }
+ // Rebuild the aggregate readout after correcting unsupported-only penalties.
+ maxUtil=0;overloaded=0;
  for(const {e} of allMembers()){
+  if(!e.failed){maxUtil=Math.max(maxUtil,Number(e.utilization)||0);if((Number(e.utilization)||0)>1)overloaded++;}
   integritySum+=clamp(e.integrity,0,1);integrityN++;
   if(e.failed){e.integrity=0;e.structuralIntegrity=0;e.state=e.shattered?'SHATTERED':'FAILED'}else if(e.snapped){e.structuralIntegrity=e.integrity;e.state='SNAPPED'}else{e.structuralIntegrity=e.integrity;e.state=(e.utilization||0)>1?'OVERLOADED':e.isFreefalling?'FLOATING':'SUPPORTED'}
   e.isLoaded=(e.demand||0)>.02;e.isStressed=(e.utilization||0)>.8;
@@ -734,6 +751,13 @@ function analyzeStructure(){
 }
 function getClosestSupportToCom(comX,supportPoints){if(!supportPoints.length)return null;return supportPoints.reduce((best,p)=>Math.abs(p.x-comX)<Math.abs(best.x-comX)?p:best,supportPoints[0])}
 function isCoMWithinBase(comX,supportPoints){if(!supportPoints.length)return false;const xs=supportPoints.map(p=>p.x),minX=Math.min(...xs),maxX=Math.max(...xs);if(maxX-minX<STORY_HEIGHT*.08)return Math.abs(comX-minX)<=STORY_HEIGHT*.08;return comX>=minX&&comX<=maxX}
+function estimateAssemblyOrientation(nodeKeys,nodes){
+ const samples=[];let total=0,refX=0,refY=0,posX=0,posY=0;
+ for(const key of nodeKeys){const node=nodes[key];if(!node)continue;const mass=Math.max(.01,Number(node.mass)||.01),rx=Number(node.reference?.x),ry=Number(node.reference?.y),x=Number(node.position?.x),y=Number(node.position?.y);if(![rx,ry,x,y].every(Number.isFinite))continue;samples.push({mass,rx,ry,x,y});total+=mass;refX+=mass*rx;refY+=mass*ry;posX+=mass*x;posY+=mass*y;}
+ if(total<=0||samples.length<2)return 0;refX/=total;refY/=total;posX/=total;posY/=total;let dot=0,cross=0;
+ for(const p of samples){const rx=p.rx-refX,ry=p.ry-refY,x=p.x-posX,y=p.y-posY;dot+=p.mass*(rx*x+ry*y);cross+=p.mass*(rx*y-ry*x);}
+ return Math.abs(dot)+Math.abs(cross)>1e-8?Math.atan2(cross,dot):0;
+}
 function calculateStability(analysis){
  const nodes=sim.nodes||Object.create(null),links=sim.memberLinks||[],nodeKeys=Object.keys(nodes),adj=Object.create(null),nodeAssembly=Object.create(null),components=[];
  for(const key of nodeKeys)adj[key]=[];
@@ -750,7 +774,7 @@ function calculateStability(analysis){
  const previous=sim.assemblyDynamics||Object.create(null),nextDynamics=Object.create(null),assemblies=[];
  for(const c of components){
   if(c.mass<=.001){for(const key of c.nodeKeys){const n=nodes[key];if(n)addMass(c,Math.max(.005,n.mass||.005),n.position.x,n.position.y,0,n.referenceLevel)}}
-  const massProperties=PHYSICS_MODEL?.calculateMassProperties2D?.(c.massElements||[])||null;c.comX=massProperties?.comX??(c.mass?c.weightedX/c.mass:0);c.comY=massProperties?.comY??(c.mass?c.weightedY/c.mass:0);c.totalMass=Math.max(.01,massProperties?.mass??c.mass);c.supportPoints=c.supportPoints.filter((p,i,arr)=>arr.findIndex(q=>Math.abs(q.x-p.x)<.01)===i).sort((a,b)=>a.x-b.x);
+  const massProperties=PHYSICS_MODEL?.calculateMassProperties2D?.(c.massElements||[])||null;c.comX=massProperties?.comX??(c.mass?c.weightedX/c.mass:0);c.comY=massProperties?.comY??(c.mass?c.weightedY/c.mass:0);c.totalMass=Math.max(.01,massProperties?.mass??c.mass);c.orientationAngle=estimateAssemblyOrientation(c.nodeKeys,nodes);c.supportPoints=c.supportPoints.filter((p,i,arr)=>arr.findIndex(q=>Math.abs(q.x-p.x)<.01)===i).sort((a,b)=>a.x-b.x);
   c.minSupportX=c.supportPoints.length?Math.min(...c.supportPoints.map(p=>p.x)):null;c.maxSupportX=c.supportPoints.length?Math.max(...c.supportPoints.map(p=>p.x)):null;
   c.withinBase=isCoMWithinBase(c.comX,c.supportPoints);c.outside=c.supportPoints.length===0||!c.withinBase;c.isFloating=c.supportPoints.length===0&&c.members.length>0&&[...c.nodeKeys].some(key=>!nodes[key]?.isGroundConnected);
   c.supportCentroid=c.supportPoints.length?c.supportPoints.reduce((sum,p)=>sum+p.x*p.capacity,0)/c.supportPoints.reduce((sum,p)=>sum+p.capacity,0):c.comX;
@@ -766,10 +790,12 @@ function calculateStability(analysis){
  sim.assemblyDynamics=nextDynamics;sim.stability={assemblies,primary:null,nodeAssembly,byId};
  const eligible=assemblies.filter(c=>c.members.length||c.supportPoints.length).sort((a,b)=>{const ar=a.supportPoints.length?1:0,br=b.supportPoints.length?1:0;if(ar!==br)return br-ar;return b.totalMass-a.totalMass});
  const risk=eligible.filter(c=>c.shouldTip||c.isFloating).sort((a,b)=>b.totalMass-a.totalMass);sim.stability.primary=risk[0]||eligible[0]||null;
- // Translational and rotational inertia are exposed in the live assembly details for diagnostics.
+ // A detached assembly's whole-body rotation is not internal member stress.
+ // Keep its local demand metrics, rather than multiplying every member's stress
+ // simply because the complete level is rotating while falling.
  for(const c of assemblies){
   const dyn=c.dynamics,angle=Math.abs(dyn.rotation),excess=Math.max(0,angle-CRITICAL_TILT),multiplier=Math.exp(Math.min(3.1,excess*6.0))*(dyn.isRotating?1+Math.min(1.3,Math.abs(dyn.angularVelocity)*.22):1);
-  for(const link of c.members){const e=link.e,base=Number(e.utilization)||0;e.dynamicUtilization=base*multiplier+(dyn.isRotating?Math.min(1.5,Math.abs(dyn.angularVelocity)*.12):0);if(e.dynamicUtilization>base){e.utilization=Math.max(base,e.dynamicUtilization);if(analysis){analysis.maxUtil=Math.max(analysis.maxUtil,e.utilization);if(base<=1&&e.utilization>1)analysis.overloaded++}}}
+  for(const link of c.members){const e=link.e,base=Number(e.utilization)||0;if(c.isFloating){e.dynamicUtilization=base;continue;}e.dynamicUtilization=base*multiplier+(dyn.isRotating?Math.min(1.5,Math.abs(dyn.angularVelocity)*.12):0);if(e.dynamicUtilization>base){e.utilization=Math.max(base,e.dynamicUtilization);if(analysis){analysis.maxUtil=Math.max(analysis.maxUtil,e.utilization);if(base<=1&&e.utilization>1)analysis.overloaded++}}}
  }
 }
 function buildStorySupportProfiles(){
@@ -2060,7 +2086,22 @@ function updateJointYielding(dt){
  if(changed)refreshAnalysis();
  return changed;
 }
-function evaluateColumnTiltFailures(){let changed=false;for(const link of sim.memberLinks){const e=link.e;if(e.kind!=='column'||e.failed||e.integrity<=0)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y;e.tiltAngle=Math.atan2(Math.abs(dx),Math.max(.01,Math.abs(dy)));if(e.tiltAngle>COLUMN_TILT_LIMIT){failMember(link,`column tilt exceeded ${(COLUMN_TILT_LIMIT*180/Math.PI).toFixed(0)}° limit`);changed=true}}if(changed)refreshAnalysis();return changed}
+function evaluateColumnTiltFailures(){
+ let changed=false;
+ for(const link of sim.memberLinks){
+  const e=link.e;if(e.kind!=='column'||e.failed||e.integrity<=0)continue;
+  const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
+  const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y;
+  const assemblyId=sim.stability?.nodeAssembly?.[link.nodeA],assembly=assemblyId?sim.stability?.byId?.[assemblyId]:null;
+  // A column turning with its airborne assembly is still intact; only its tilt
+  // relative to the assembly is treated as local deformation.
+  e.tiltAngle=assembly?.isFloating&&PHYSICS_MODEL?.columnTiltRelativeToAssembly
+   ?PHYSICS_MODEL.columnTiltRelativeToAssembly(dx,dy,assembly.orientationAngle||0)
+   :Math.atan2(Math.abs(dx),Math.max(.01,Math.abs(dy)));
+  if(e.tiltAngle>COLUMN_TILT_LIMIT){failMember(link,`column relative tilt exceeded ${(COLUMN_TILT_LIMIT*180/Math.PI).toFixed(0)}° limit`);changed=true}
+ }
+ if(changed)refreshAnalysis();return changed;
+}
 async function stepPhysics(dt){
  const activeSimulation=sim;
  sim.time+=dt;for(const fx of sim.explosionEffects||[])fx.age+=dt;sim.explosionEffects=(sim.explosionEffects||[]).filter(fx=>fx.age<fx.duration);processPendingMaterialBlasts(2);if(sim.time-(sim.lastCollisionCleanup||0)>2){for(const [k,t] of Object.entries(sim.collisionPairs))if(sim.time-t>2)delete sim.collisionPairs[k];sim.lastCollisionCleanup=sim.time}let a=refreshAnalysis();updateStabilityDynamics(dt);evaluateBeamBending(dt);updateSnappedBeamHinges(dt);a=refreshAnalysis();updateJointYielding(dt);
