@@ -160,6 +160,22 @@
     return Math.abs(Math.atan2(Math.sin(difference), Math.cos(difference)));
   }
 
+
+  // Only low-speed contacts against an actual, supported surface may put a
+  // debris body to sleep. "onSimulationGround" is the sole permanent-rest case.
+  function canDebrisSettle({
+    relativeSpeed = 0, relativeHorizontalSpeed = 0, angularSpeed = 0,
+    kind = 'beam', angle = 0, surfaceSupported = false,
+    onSimulationGround = false
+  } = {}) {
+    if (!onSimulationGround && surfaceSupported !== true) return false;
+    if (Math.max(0, finite(relativeSpeed)) >= 0.65) return false;
+    if (Math.abs(finite(relativeHorizontalSpeed)) >= 0.45) return false;
+    if (Math.abs(finite(angularSpeed)) >= 0.18) return false;
+    if (kind === 'column' && Math.abs(Math.sin(finite(angle))) >= 0.80) return false;
+    return true;
+  }
+
   // Model a partial-story collapse as a hinge around the surviving support
   // on the opposite side of a damaged support line. centerShift is
   // active-support COM minus nominal-support COM; its sign identifies the weak side.
@@ -242,6 +258,7 @@
     calculateFoldResponse,
     calculateDetachedMemberUtilization,
     columnTiltRelativeToAssembly,
+    canDebrisSettle,
     chooseQualityTier,
     shadeForMoisture
   });
