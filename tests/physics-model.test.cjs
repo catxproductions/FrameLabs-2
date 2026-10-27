@@ -122,3 +122,30 @@ test('component mass properties calculate COM and inertia about COM and a suppor
   assert.equal(invalid.mass, 0, 'invalid or non-positive mass samples are ignored');
   assert.equal(invalid.inertiaAboutCOM, 0);
 });
+
+
+test('asymmetric support loss creates a gravity-driven inward fold toward the weak side', () => {
+  const model = loadModel();
+  const weakRight = model.calculateFoldResponse({
+    mass: 20, comX: 5, pivotX: 1, inertia: 200,
+    supportLoss: 0.25, supportCenterShift: -0.6, storyWidth: 3.15
+  });
+  assert.equal(weakRight.active, true);
+  assert.equal(weakRight.direction, 1, 'a support-capacity shift left indicates weakness on the right');
+  assert.ok(weakRight.torque < 0, 'the surviving left pivot produces clockwise torque toward the weak right side');
+  assert.ok(weakRight.angularAcceleration < 0);
+
+  const weakLeft = model.calculateFoldResponse({
+    mass: 20, comX: 5, pivotX: 9, inertia: 200,
+    supportLoss: 0.25, supportCenterShift: 0.6, storyWidth: 3.15
+  });
+  assert.equal(weakLeft.active, true);
+  assert.equal(weakLeft.direction, -1);
+  assert.ok(weakLeft.torque > 0, 'the surviving right pivot produces counter-clockwise torque toward the weak left side');
+
+  const symmetric = model.calculateFoldResponse({
+    mass: 20, comX: 5, pivotX: 1, inertia: 200,
+    supportLoss: 0.25, supportCenterShift: 0, storyWidth: 3.15
+  });
+  assert.equal(symmetric.active, false, 'symmetric support loss alone does not invent a preferred folding direction');
+});
