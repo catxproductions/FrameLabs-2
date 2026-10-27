@@ -150,6 +150,38 @@
     return Math.max(forceUtilization, bendingUtilization);
   }
 
+
+  // Unified falling assemblies are in free fall, so their own weight should not
+  // be counted as internal member stress. Only external wind, collision stress,
+  // or deformation relative to the assembly contributes to local failure.
+  function calculateUnifiedAssemblyStress({
+    capacity = 1, integrity = 1, connectionFactor = 1,
+    windDemand = 0, impactStress = 0, axialStrain = 0, relativeAngle = 0
+  } = {}) {
+    const remaining = clamp(finite(integrity, 1), 0, 1);
+    const joints = clamp(finite(connectionFactor, 1), 0.18, 1);
+    const effectiveCapacity = Math.max(
+      0.01,
+      Math.max(0, finite(capacity)) * remaining * joints
+    );
+    const windUtilization = Math.max(0, finite(windDemand)) / effectiveCapacity;
+    const impactUtilization = Math.max(0, finite(impactStress)) / 1.25;
+    const axialUtilization = Math.abs(finite(axialStrain)) / 0.18;
+    const bendingUtilization = Math.abs(finite(relativeAngle)) / 0.32;
+    const utilization = Math.max(
+      windUtilization, impactUtilization, axialUtilization, bendingUtilization
+    );
+    return {
+      effectiveCapacity,
+      windUtilization,
+      impactUtilization,
+      axialUtilization,
+      bendingUtilization,
+      utilization,
+      overstressed: utilization > 1
+    };
+  }
+
   // A column carried by a rotating/falling frame should be tested against the
   // frame's orientation, not the world's vertical. This prevents a rigid-body
   // tumble from being mistaken for local column bending.
@@ -257,6 +289,7 @@
     calculateMassProperties2D,
     calculateFoldResponse,
     calculateDetachedMemberUtilization,
+    calculateUnifiedAssemblyStress,
     columnTiltRelativeToAssembly,
     canDebrisSettle,
     chooseQualityTier,
