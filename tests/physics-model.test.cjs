@@ -219,3 +219,24 @@ test('whole-assembly rotation does not count as local column bending', () => {
   assert.ok(locallyBent > 0.4,
     'local bending relative to the assembly still produces a failure signal');
 });
+
+
+test('debris settles only on supported surfaces and only ground settling is permanent', () => {
+  const model = loadModel();
+  const lowSpeed = {
+    relativeSpeed: 0.1, relativeHorizontalSpeed: 0.05,
+    angularSpeed: 0.01, kind: 'beam', angle: 0
+  };
+  assert.equal(model.canDebrisSettle({ ...lowSpeed, surfaceSupported: true }), true,
+    'low-speed contact with a supported member can sleep temporarily');
+  assert.equal(model.canDebrisSettle({ ...lowSpeed, surfaceSupported: false }), false,
+    'an unsupported/falling surface cannot hold sleeping debris');
+  assert.equal(model.canDebrisSettle({ ...lowSpeed, surfaceSupported: true, onSimulationGround: true }), true,
+    'the simulation ground permits permanent settling');
+  assert.equal(model.canDebrisSettle({
+    ...lowSpeed, surfaceSupported: true, relativeSpeed: 1
+  }), false, 'high-speed impacts remain dynamic');
+  assert.equal(model.canDebrisSettle({
+    ...lowSpeed, surfaceSupported: true, kind: 'column', angle: Math.PI / 2
+  }), false, 'a vertical column fragment must not sleep upright');
+});
