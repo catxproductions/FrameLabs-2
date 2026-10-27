@@ -7,6 +7,7 @@ const vm = require('node:vm');
 
 const materialsSource = fs.readFileSync(path.resolve(__dirname, '../js/materials.js'), 'utf8');
 const physicsSource = fs.readFileSync(path.resolve(__dirname, '../js/physics-model.js'), 'utf8');
+const mainSource = fs.readFileSync(path.resolve(__dirname, '../js/main.js'), 'utf8');
 
 function loadLibraries() {
   class CustomEvent {
@@ -239,4 +240,45 @@ test('debris settles only on supported surfaces and only ground settling is perm
   assert.equal(model.canDebrisSettle({
     ...lowSpeed, surfaceSupported: true, kind: 'column', angle: Math.PI / 2
   }), false, 'a vertical column fragment must not sleep upright');
+});
+
+
+test('unified falling assemblies ignore gravity-only load-path penalties', () => {
+  const model = loadModel();
+  const freeFall = model.calculateUnifiedAssemblyStress({
+    capacity: 100, integrity: 1, connectionFactor: 1,
+    windDemand: 0, impactStress: 0, axialStrain: 0, relativeAngle: 0
+  });
+  assert.equal(freeFall.utilization, 0,
+    'an unsupported but rigidly falling assembly has no internal stress from its own weight');
+  assert.equal(freeFall.overstressed, false);
+
+  const windLoaded = model.calculateUnifiedAssemblyStress({
+    capacity: 100, integrity: 1, connectionFactor: 1,
+    windDemand: 125, impactStress: 0, axialStrain: 0, relativeAngle: 0
+  });
+  assert.equal(windLoaded.utilization, 1.25,
+    'real external wind demand still stresses the falling members');
+
+  const collisionLoaded = model.calculateUnifiedAssemblyStress({
+    capacity: 100, integrity: 1, connectionFactor: 1,
+    windDemand: 0, impactStress: 2, axialStrain: 0, relativeAngle: 0
+  });
+  assert.equal(collisionLoaded.utilization, 1.6,
+    'collision stress can trigger damage while the assembly is falling');
+
+  const locallyBent = model.calculateUnifiedAssemblyStress({
+    capacity: 100, integrity: 1, connectionFactor: 1,
+    windDemand: 0, impactStress: 0, axialStrain: 0.02, relativeAngle: 0.48
+  });
+  assert.equal(locallyBent.overstressed, true,
+    'member deformation relative to the assembly can trigger failure');
+});
+
+test('main physics tags intact floating assemblies and bypasses gravity-only failure heuristics', () => {
+  assert.match(mainSource, /e\.unifiedAssemblyId=null;e\.isUnifiedFallingAssembly=false/);
+  assert.match(mainSource, /if\(assembly\?\.isFloating\)\{\s*e\.unifiedAssemblyId=assembly\.key;\s*e\.isUnifiedFallingAssembly=true;/);
+  assert.match(mainSource, /if\(e\.isUnifiedFallingAssembly\)\{\s*\/\/ Static span analysis assumes gravity load is carried to ground/);
+  assert.match(mainSource, /if\(e\.isUnifiedFallingAssembly\)\{\s*\/\/ Skip invented world-vertical joint loads/);
+  assert.match(mainSource, /if\(e\.isUnifiedFallingAssembly\)\{\s*\/\/ Free fall removes the assembly's own weight/);
 });
