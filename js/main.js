@@ -2211,8 +2211,11 @@ function updateJointYielding(dt){
    const stress=getUnifiedAssemblyMemberStress(link);
    for(const [end,conn] of [['a',link.connectionA],['b',link.connectionB]]){
     if(conn.broken)continue;
-    const ratio=clamp(Math.max(stress.utilization*1.18,conn.pendingBreakUntil!=null?(Number(conn.lastDemandRatio)||0):0),0,4);
-    if(ratio<.86&&conn.pendingBreakUntil==null)continue;
+    const ratio=clamp(Math.max(stress.utilization,conn.pendingBreakUntil!=null?(Number(conn.lastDemandRatio)||0):0),0,4);
+    // Do not start joint yielding below the member's actual normalized stress limit.
+    // The previous 1.18 multiplier plus a 0.86 trigger allowed joints to yield at
+    // roughly 73% demand, recreating premature fragmentation during free fall.
+    if(ratio<=1&&conn.pendingBreakUntil==null)continue;
     const recentImpactAge=sim.time-(Number(e.lastImpactTime)||-Infinity);
     const angle=recentImpactAge<.5&&Number.isFinite(conn.forceAngle)?conn.forceAngle:stress.relativeAngle;
     const ready=conn.applyDemand(ratio,angle,dt,sim.time);
