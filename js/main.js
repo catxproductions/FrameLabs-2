@@ -2610,3 +2610,4 @@ applyPhysicsComputeMode();
 runPerformanceBenchmark();
 requestAnimationFrame(animate);
 })();
+// designed and programmed by ACIDIC PRODUCTIONS
