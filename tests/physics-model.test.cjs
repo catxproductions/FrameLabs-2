@@ -282,3 +282,11 @@ test('main physics tags intact floating assemblies and bypasses gravity-only fai
   assert.match(mainSource, /if\(e\.isUnifiedFallingAssembly\)\{\s*\/\/ Skip invented world-vertical joint loads/);
   assert.match(mainSource, /if\(e\.isUnifiedFallingAssembly\)\{\s*\/\/ Free fall removes the assembly's own weight/);
 });
+
+
+test('unified falling assembly joints do not yield below actual normalized stress', () => {
+  assert.match(mainSource, /const ratio=clamp\(Math\.max\(stress\.utilization,conn\.pendingBreakUntil!=null\?\(Number\(conn\.lastDemandRatio\)\|\|0\):0\),0,4\)/);
+  assert.match(mainSource, /if\(ratio<=1&&conn\.pendingBreakUntil==null\)continue/);
+  assert.doesNotMatch(mainSource, /stress\.utilization\*1\.18/,
+    'falling assembly joint demand must not be artificially amplified');
+});
