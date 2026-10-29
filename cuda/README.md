@@ -1,16 +1,16 @@
-# FrameLabs 2 — Native CUDA Tensor Core Mode (experimental)
+# FrameLabs 2 — RTX Mode (experimental)
 
-This folder is a **separate native mode** for CUDA-capable NVIDIA GPUs. It does
-not replace or alter the browser/GitHub Pages build, the JavaScript solver, the
-CPU worker, or WebGPU fallback. The browser game continues to work without CUDA.
+RTX Mode is a **separate native mode** for compatible NVIDIA GPUs. It does
+not replace or alter the browser/GitHub Pages build, JavaScript solver, CPU
+worker, or WebGPU fallback. The browser game continues to work without RTX Mode.
 
-The prototype uses `#include <mma.h>` and CUDA WMMA to run a dense half-precision
-matrix multiplication with FP32 accumulation on Tensor Cores. It is a foundation
-and hardware/build check for a future native physics backend, not a claim that
-Tensor Cores currently accelerate live building collapse, collision detection,
-or the existing web game. Those physics workloads are not automatically dense
-matrix operations, so connecting this mode requires a carefully chosen physics
-algorithm and numerical validation.
+The prototype uses CUDA WMMA via `#include <mma.h>` to run a dense
+half-precision matrix multiplication with FP32 accumulation on Tensor Cores.
+This is a foundation and hardware/build check for a future native physics
+backend, not a claim that Tensor Cores currently accelerate live building
+collapse, collision detection, or the existing web game. Those workloads are
+not automatically dense matrix operations, so connecting RTX Mode to physics
+requires a carefully chosen algorithm and numerical validation.
 
 ## Requirements
 
@@ -31,13 +31,13 @@ cmake --build build/cuda --config Release
 Run the matrix benchmark (size must be a multiple of 16, between 16 and 8192):
 
 ```sh
-./build/cuda/framelabs_cuda_mode 1024
+./build/cuda/framelabs_rtx_mode 1024
 ```
 
 On Windows, the executable may be under `build/cuda/Release/`.
 
 For another NVIDIA GPU, change `CMAKE_CUDA_ARCHITECTURES` to a supported target.
-This mode needs a native CUDA environment; it cannot be compiled into the normal
+RTX Mode needs a native CUDA environment; it cannot be compiled into the normal
 GitHub Pages JavaScript/WebAssembly build by adding the header to the existing
 `cpp/physics_core.cpp`.
 
