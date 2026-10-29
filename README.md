@@ -59,7 +59,7 @@ Vulkan RTX Mode is a separate opt-in backend and does not use the CUDA Toolkit o
 
 Important: the browser-side integration path is standard Vulkan compute. The helper may report whether a cooperative-matrix Vulkan extension is exposed by the installed driver, but extension detection alone does not prove Tensor Core execution. The current per-body integration shader uses ordinary floating-point arithmetic and does not dispatch a cooperative-matrix/Tensor Core kernel. Do not interpret this mode as Tensor Core acceleration until a real cooperative-matrix workload is implemented, validated, and benchmarked on supported hardware.
 
-The native helper requires the Vulkan SDK/runtime and a compatible NVIDIA driver. It is intentionally separate from `cuda/` so Vulkan builds do not require nvcc or CUDA libraries.
+The native helper requires the Vulkan SDK/runtime (including `glslc`) and a compatible NVIDIA driver. It is intentionally separate from `cuda/` so Vulkan builds do not require nvcc or CUDA libraries. Build it from the repository root with `cmake -S vulkan -B build/vulkan` followed by `cmake --build build/vulkan --config Release`. On Windows, run `build/vulkan/Release/framelabs_vulkan_rtx_mode.exe`; see [the Vulkan helper guide](vulkan/README.md) for details.
 
 ## Pre-calculation and replay
 
