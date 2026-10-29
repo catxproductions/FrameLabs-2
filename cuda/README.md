@@ -6,8 +6,12 @@ worker, or WebGPU fallback. The browser game continues to work without RTX Mode.
 
 The prototype uses CUDA WMMA via `#include <mma.h>` to run a dense
 half-precision matrix multiplication with FP32 accumulation on Tensor Cores.
-This is a foundation and hardware/build check for a future native physics
-backend, not a claim that Tensor Cores currently accelerate live building
+The program warms up the kernel, reports GPU kernel time (not end-to-end
+simulation time), checks that outputs are finite, and compares five output
+cells with a CPU reference. These are useful smoke checks, not a substitute
+for compiling and testing on each target GPU. This is a foundation and
+hardware/build check for a future native physics backend, not a claim that
+Tensor Cores currently accelerate live building
 collapse, collision detection, or the existing web game. Those workloads are
 not automatically dense matrix operations, so connecting RTX Mode to physics
 requires a carefully chosen algorithm and numerical validation.
