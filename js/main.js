@@ -441,8 +441,8 @@ function refreshMemberTopology(){
   const stateB=sim.connectionStates[connectionId(id,'b')]||(sim.connectionStates[connectionId(id,'b')]={broken:!!e.failed,reason:e.failed?'member failed':'',plasticDamage:e.jointDamageB||0,stiffnessFactor:clamp(1-.82*(e.jointDamageB||0),.12,1),pendingBreakUntil:null,lastDemandRatio:0,forceAngle:0,frictionHoldUntil:0});
   const ca=new Connection(connectionId(id,'a'),id,aKey,strength,stateA),cb=new Connection(connectionId(id,'b'),id,bKey,strength,stateB);
   connections.push(ca,cb);e.connections=[ca.id,cb.id];
-  const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y;e.angle=Math.atan2(dy,dx);e.strain=Math.hypot(dx,dy)/STORY_HEIGHT-1;
-  links.push({id,group,key,e,nodeA:aKey,nodeB:bKey,connectionA:ca,connectionB:cb,restLength:group==='braces'?STORY_HEIGHT*Math.SQRT2:STORY_HEIGHT});
+  const dx=b.position.x-a.position.x,dy=b.position.y-a.position.y;e.angle=Math.atan2(dy,dx);const restLength=group==='braces'?STORY_HEIGHT*Math.SQRT2:STORY_HEIGHT;e.strain=(Math.hypot(dx,dy)-restLength)/Math.max(.001,restLength);
+  links.push({id,group,key,e,nodeA:aKey,nodeB:bKey,connectionA:ca,connectionB:cb,restLength});
  }
  for(const load of Object.values(BuildingMap.loads)){ensureNode(load.x,load.y);ensureNode(load.x+1,load.y)}
  for(const key of Object.keys(nodes))if(!usedNodes.has(key))delete nodes[key];
@@ -715,10 +715,35 @@ function analyzeStructure(){
   beam.utilization=Math.max(d/Math.max(.01,beam.capacity*beam.integrity*Math.max(.18,beam.connectionFactor||1)),beam.momentUtilization);beam.isStressed=beam.utilization>.8;maxUtil=Math.max(maxUtil,beam.utilization);if(beam.utilization>1)overloaded++;
  }
  for(const [key,brace]of Object.entries(BuildingMap.braces)){
-  if(brace.failed){brace.demand=brace.mass;brace.utilization=9;brace.unsupported=true;continue}
-  const ends=endpointKeys('braces',brace),a=sim.nodes[ends[0]],b=sim.nodes[ends[1]],loadA=a?nodeLoads[a.referenceLevel]?.[a.gridX]||0:0,loadB=b?nodeLoads[b.referenceLevel]?.[b.gridX]||0:0;
-  brace.windDemand=windLoadForMember('brace',brace);brace.demand=brace.mass*.65+(loadA+loadB)*.11+Math.abs(brace.lateralForce||0)*.22+Math.max(0,brace.impactStress||0)*brace.capacity*.08+brace.windDemand;
-  const liveEnds=ends.filter(k=>sim.nodes[k]?.isGroundConnected).length;brace.unsupported=liveEnds===0;brace.utilization=brace.demand/Math.max(.01,brace.capacity*brace.integrity*Math.max(.18,brace.connectionFactor||1));if(brace.unsupported)brace.utilization=Math.max(brace.utilization,.72);
+  if(brace.failed){brace.demand=brace.mass;brace.utilization=9;brace.unsupported=true;brace.axialForce=0;brace.axialStrain=0;continue}
+  const ends=endpointKeys('braces',brace),a=sim.nodes[ends[0]],b=sim.nodes[ends[1]];
+  const loadA=a?Math.max(0,nodeLoads[a.referenceLevel]?.[a.gridX]||0):0;
+  const loadB=b?Math.max(0,nodeLoads[b.referenceLevel]?.[b.gridX]||0):0;
+  const link=sim.memberLinks.find(item=>item.group==='braces'&&item.key===key);
+  const dx=a&&b?b.position.x-a.position.x:STORY_HEIGHT;
+  const dy=a&&b?b.position.y-a.position.y:STORY_HEIGHT;
+  const length=Math.max(.001,Math.hypot(dx,dy));
+  const restLength=link?.restLength||STORY_HEIGHT*Math.SQRT2;
+  const axialStrain=(length-restLength)/Math.max(.001,restLength);
+  const verticalShare=Math.abs(loadB-loadA)*Math.abs(dx)/length;
+  const horizontalDemand=(Math.abs(Number(brace.lateralForce)||0)+windLoadForMember('brace',brace))*Math.abs(dy)/length;
+  const deformationDemand=Math.abs(axialStrain)*brace.capacity*2.4;
+  const impactDemand=Math.max(0,Number(brace.impactStress)||0)*brace.capacity*.08;
+  brace.windDemand=windLoadForMember('brace',brace);
+  brace.axialStrain=axialStrain;
+  // Positive axial force is tension; negative is compression. Compression has
+  // a lower effective capacity to approximate diagonal-member buckling.
+  brace.axialForce=(verticalShare+horizontalDemand+deformationDemand)*Math.sign(axialStrain||1);
+  brace.bucklingFactor=brace.axialForce<0?.62:1;
+  brace.demand=brace.mass*.35+verticalShare+horizontalDemand+deformationDemand+impactDemand;
+  const jointA=link?.connectionA, jointB=link?.connectionB;
+  const jointFactor=clamp(Math.min(jointA?.stiffnessFactor??1,jointB?.stiffnessFactor??1),.18,1);
+  brace.connectionFactor=jointFactor;
+  const effectiveCapacity=Math.max(.01,brace.capacity*clamp(brace.integrity,0,1)*jointFactor*brace.bucklingFactor);
+  brace.unsupported=!a||!b||!link||!linkTransfersSupport(link);
+  brace.utilization=brace.demand/effectiveCapacity;
+  // Lack of a direct foundation connection is a global load-path condition,
+  // not a reason to mark every brace in a floating but intact frame overloaded.
   brace.isLoaded=brace.demand>.02;brace.isStressed=brace.utilization>.8;maxUtil=Math.max(maxUtil,brace.utilization);if(brace.utilization>1)overloaded++;
  }
  // A free-falling connected frame has no ground load path by definition.
