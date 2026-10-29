@@ -12,6 +12,7 @@ using Sock=int; const Sock BAD=-1; static void closeSock(Sock s){::close(s);}
 #endif
 #include <vulkan/vulkan.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
