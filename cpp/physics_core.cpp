@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <stddef.h>
-#include <mma.h>
 
 extern "C" {
 extern unsigned char __heap_base;
