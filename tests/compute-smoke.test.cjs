@@ -537,7 +537,11 @@ test('wind affects structural demand and uses the sustained-overload failure pat
   assert.match(js, /PHYSICS_MODEL\?\.windMemberDemand/);
   assert.match(js, /col\.windDemand=windLoadForMember\('column',col\);col\.demand\+=col\.windDemand/);
   assert.match(js, /beam\.windDemand=windDemand;beam\.demand=d/);
-  assert.match(js, /brace\.windDemand=windLoadForMember\('brace',brace\)/);\n  assert.match(js, /brace\.axialStrain=axialStrain/);\n  assert.match(js, /brace\.axialForce=.*Math\.sign\(axialStrain\|\|1\)/);\n  assert.match(js, /brace\.bucklingFactor=brace\.axialForce<0\?\.62:1/);\n  assert.match(js, /const effectiveCapacity=Math\.max\(\.01,brace\.capacity\*clamp\(brace\.integrity,0,1\)\*jointFactor\*brace\.bucklingFactor\)/);
+  assert.match(js, /brace\.windDemand=windLoadForMember\('brace',brace\)/);
+  assert.match(js, /brace\.axialStrain=axialStrain/);
+  assert.match(js, /brace\.axialForce=.*Math\.sign\(axialStrain\|\|1\)/);
+  assert.match(js, /brace\.bucklingFactor=brace\.axialForce<0\?\.62:1/);
+  assert.match(js, /const effectiveCapacity=Math\.max\(\.01,brace\.capacity\*clamp\(brace\.integrity,0,1\)\*jointFactor\*brace\.bucklingFactor\)/);
   assert.match(js, /if\(util>1\)\{sim\.overloadTimers/);
   assert.match(model, /function windMemberDemand\(/);
   assert.match(html, /Sustained severe wind can weaken and break vulnerable members/);
