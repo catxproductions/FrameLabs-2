@@ -537,7 +537,10 @@ test('wind affects structural demand and uses the sustained-overload failure pat
   assert.match(js, /PHYSICS_MODEL\?\.windMemberDemand/);
   assert.match(js, /col\.windDemand=windLoadForMember\('column',col\);col\.demand\+=col\.windDemand/);
   assert.match(js, /beam\.windDemand=windDemand;beam\.demand=d/);
-  assert.match(js, /brace\.windDemand=windLoadForMember\('brace',brace\);brace\.demand=.*brace\.windDemand/);
+  assert.match(js, /brace\.windDemand=windLoadForMember\('brace',brace\)/);
+  assert.match(js, /route\.link\.e\.transferredLoad=\(Number\(route\.link\.e\.transferredLoad\)\|\|0\)\+share\/Math\.max\(\.05,route\.verticalRatio\)/);
+  assert.match(js, /const compressiveStrain=Math\.max\(0,-axialStrain-\.015\)/);
+  assert.match(js, /brace\.bucklingFactor=compressiveStrain>0\?\.72:1/);
   assert.match(js, /if\(util>1\)\{sim\.overloadTimers/);
   assert.match(model, /function windMemberDemand\(/);
   assert.match(html, /Sustained severe wind can weaken and break vulnerable members/);
