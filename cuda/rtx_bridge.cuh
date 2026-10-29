@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -193,7 +194,7 @@ inline std::string makeResponse(int code, const std::string& status,
   return output.str();
 }
 
-__global__ inline void integrateBodiesKernel(float* data, unsigned int count, float dt) {
+__global__ void integrateBodiesKernel(float* data, unsigned int count, float dt) {
   const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= count) return;
   const unsigned int b = index * static_cast<unsigned int>(kBodyStride);
