@@ -178,10 +178,14 @@ int main(int argc, char** argv) {
             << "Matrix: " << n << " x " << n << "\n"
             << "Measured launches: " << iterations << "\n"
             << "Average WMMA kernel time (after warm-up): " << averageElapsedMs << " ms\n"
-            << "Approx. matrix throughput: "
-            << (2.0 * static_cast<double>(n) * n * n /
-                (averageElapsedMs * 1.0e-3) / 1.0e12) << " TFLOP/s\n"
-            << "Finite output check: " << (finite ? "PASS" : "FAIL") << "\n"
+            << "Approx. matrix throughput: ";
+  if (averageElapsedMs > 0.0f) {
+    std::cout << (2.0 * static_cast<double>(n) * n * n /
+                  (averageElapsedMs * 1.0e-3) / 1.0e12) << " TFLOP/s\n";
+  } else {
+    std::cout << "unavailable (timer resolution)\n";
+  }
+  std::cout << "Finite output check: " << (finite ? "PASS" : "FAIL") << "\n"
             << "CPU sample comparison: " << (samplesPass ? "PASS" : "FAIL") << "\n"
             << "Note: this benchmarks Tensor Core matrix math; it is not yet "
                "connected to live FrameLabs structural physics.\n";
