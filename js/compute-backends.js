@@ -755,7 +755,7 @@
       if (!response.ok) {
         const detail = (await response.text()).trim();
         throw new Error(detail
-          ? (/^error \\d{3}:/.test(detail) ? detail : 'error 027: ' + detail)
+          ? (/^error [0-9]{3}:/.test(detail) ? detail : 'error 027: ' + detail)
           : 'error 027: local CUDA helper returned HTTP ' + response.status);
       }
       const resultBytes = await response.arrayBuffer();
