@@ -29,7 +29,7 @@ Start with the [beginner material guide](js/MATERIALS_GUIDE.md). The guide expla
 
 ## CPU worker and WebGPU physics integration
 
-- The **Physics compute** selector offers Auto, CPU worker, WebGPU (with CPU fallback), main-thread CPU compatibility, and an opt-in native RTX CUDA mode.
+- The **Physics compute** selector offers Auto, CPU worker, WebGPU (with CPU fallback), main-thread CPU compatibility, and an opt-in native RTX CUDA mode or the separate native Vulkan RTX mode.
 - `js/compute-worker.js` performs live batched semi-implicit integration of structural-node and debris positions, velocities, and angular state off the main thread. It also runs ordered Gauss-Seidel member-length constraint iterations and the follow-up velocity projection, and retains the demand/capacity diagnostic scan.
 - `js/compute-backends.js` routes motion integration to the persistent CPU worker or WebGPU. Auto mode benchmarks 256, 1,024, and 4,096-body batches and enables GPU integration only from a measured crossover where WebGPU is at least 15% faster at that size and all larger tested sizes. It does not assume that an available GPU is always faster.
 - WebGPU state, uniform, and readback buffers are reused across fixed 120 Hz substeps instead of being created and destroyed for each batch. Readback is still required because the authoritative structural solver consumes the updated state on the CPU, so tiny batches can still favor the worker.
@@ -47,11 +47,19 @@ cmake --build build/cuda --config Release
 ./build/cuda/framelabs_rtx_mode --serve
 ```
 
-On Windows, the executable may be at `build/cuda/Release/framelabs_rtx_mode.exe`; run it with `--serve` and keep the terminal open. Then open the FrameLabs 2 GitHub Pages site and choose **Physics compute → RTX Mode**. The site checks the local helper only after selection and may request browser loopback/local-network permission. Approve access only if you launched the FrameLabs helper yourself.
+On Windows, the executable may be at `build/cuda/Release/framelabs_rtx_mode.exe`; run it with `--serve` and keep the terminal open. Then open the FrameLabs 2 GitHub Pages site and choose **Physics compute → RTX Mode** (CUDA) or **Vulkan RTX Mode** (Vulkan). The site checks the local helper only after selection and may request browser loopback/local-network permission. Approve access only if you launched the FrameLabs helper yourself.
 
 The helper listens exclusively on `127.0.0.1:47652`, permits the FrameLabs GitHub Pages origin and localhost development origins, and does not listen on a LAN address. RTX Mode sends moving-body state to a CUDA kernel for position/velocity/rotation integration. If the helper disappears, the selector returns to the previous browser mode.
 
 The live motion kernel uses ordinary CUDA parallel arithmetic; the independent Tensor Core WMMA benchmark uses `#include <mma.h>`. The live per-body operation is not a dense matrix multiplication, so the WMMA benchmark is not falsely presented as accelerating real physics. Structural analysis, wind/fire damage, collisions, and member-failure decisions remain on CPU. Network transfer and memory-copy overhead may outweigh CUDA gains on smaller batches. This mode is experimental until built and profiled on an actual RTX computer.
+
+## Experimental Vulkan RTX Mode (native Vulkan, no CUDA)
+
+Vulkan RTX Mode is a separate opt-in backend and does not use the CUDA Toolkit or the CUDA helper. It connects to a native Vulkan helper on the same PC at 127.0.0.1:47653. The browser mode is wired to a distinct health/integration protocol and falls back to the previously selected browser backend if the helper disconnects.
+
+Important: the browser-side integration path is standard Vulkan compute. The helper may report whether a cooperative-matrix Vulkan extension is exposed by the installed driver, but extension detection alone does not prove Tensor Core execution. The current per-body integration shader uses ordinary floating-point arithmetic and does not dispatch a cooperative-matrix/Tensor Core kernel. Do not interpret this mode as Tensor Core acceleration until a real cooperative-matrix workload is implemented, validated, and benchmarked on supported hardware.
+
+The native helper requires the Vulkan SDK/runtime and a compatible NVIDIA driver. It is intentionally separate from `cuda/` so Vulkan builds do not require nvcc or CUDA libraries.
 
 ## Pre-calculation and replay
 
