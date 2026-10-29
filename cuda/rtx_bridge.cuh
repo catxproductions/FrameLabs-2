@@ -278,6 +278,12 @@ class BodyIntegrator {
     if (status != cudaSuccess) { error = cudaGetErrorString(status); return false; }
     status = cudaMemcpy(data.data(), deviceData_, bytes, cudaMemcpyDeviceToHost);
     if (status != cudaSuccess) { error = cudaGetErrorString(status); return false; }
+    for (float value : data) {
+      if (!std::isfinite(value)) {
+        error = "CUDA kernel returned a non-finite body state.";
+        return false;
+      }
+    }
     return true;
   }
 
@@ -323,8 +329,7 @@ inline void handleClient(FrameLabSocket client, BodyIntegrator& integrator,
               << "Access-Control-Allow-Headers: Content-Type, X-FrameLabs-Dt\r\n"
               << "Access-Control-Max-Age: 600\r\n"
               << "Connection: " << (closeConnection ? "close" : "keep-alive") << "\r\n";
-      if (!origin.empty()) headers << "Access-Control-Allow-Origin: " << origin << "\r\nVary: Origin\r\n"
-;
+      if (!origin.empty()) headers << "Access-Control-Allow-Origin: " << origin << "\r\nVary: Origin\r\n";
       headers << "\r\n";
       response = headers.str();
     } else if (request.method == "GET" && request.path == "/health") {
