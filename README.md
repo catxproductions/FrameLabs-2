@@ -41,17 +41,17 @@ Start with the [beginner material guide](js/MATERIALS_GUIDE.md). The guide expla
 
 RTX Mode connects the browser game to a separate native helper running on the same PC. It requires a supported NVIDIA RTX GPU and a CUDA Toolkit/compiler. Build it from the repository root:
 
-\`\`\`sh
+```sh
 cmake -S cuda -B build/cuda -DCMAKE_CUDA_ARCHITECTURES=89
 cmake --build build/cuda --config Release
 ./build/cuda/framelabs_rtx_mode --serve
-\`\`\`
+```
 
-On Windows, the executable may be at \`build/cuda/Release/framelabs_rtx_mode.exe\`; run it with \`--serve\` and keep the terminal open. Then open the FrameLabs 2 GitHub Pages site and choose **Physics compute → RTX Mode**. The site checks the local helper only after selection and may request browser loopback/local-network permission. Approve access only if you launched the FrameLabs helper yourself.
+On Windows, the executable may be at `build/cuda/Release/framelabs_rtx_mode.exe`; run it with `--serve` and keep the terminal open. Then open the FrameLabs 2 GitHub Pages site and choose **Physics compute → RTX Mode**. The site checks the local helper only after selection and may request browser loopback/local-network permission. Approve access only if you launched the FrameLabs helper yourself.
 
-The helper listens exclusively on \`127.0.0.1:47652\`, permits the FrameLabs GitHub Pages origin and localhost development origins, and does not listen on a LAN address. RTX Mode sends moving-body state to a CUDA kernel for position/velocity/rotation integration. If the helper disappears, the selector returns to the previous browser mode.
+The helper listens exclusively on `127.0.0.1:47652`, permits the FrameLabs GitHub Pages origin and localhost development origins, and does not listen on a LAN address. RTX Mode sends moving-body state to a CUDA kernel for position/velocity/rotation integration. If the helper disappears, the selector returns to the previous browser mode.
 
-The live motion kernel uses ordinary CUDA parallel arithmetic; the independent Tensor Core WMMA benchmark uses \`#include <mma.h>\`. The live per-body operation is not a dense matrix multiplication, so the WMMA benchmark is not falsely presented as accelerating real physics. Structural analysis, wind/fire damage, collisions, and member-failure decisions remain on CPU. Network transfer and memory-copy overhead may outweigh CUDA gains on smaller batches. This mode is experimental until built and profiled on an actual RTX computer.
+The live motion kernel uses ordinary CUDA parallel arithmetic; the independent Tensor Core WMMA benchmark uses `#include <mma.h>`. The live per-body operation is not a dense matrix multiplication, so the WMMA benchmark is not falsely presented as accelerating real physics. Structural analysis, wind/fire damage, collisions, and member-failure decisions remain on CPU. Network transfer and memory-copy overhead may outweigh CUDA gains on smaller batches. This mode is experimental until built and profiled on an actual RTX computer.
 
 ## Pre-calculation and replay
 
