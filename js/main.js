@@ -2653,6 +2653,34 @@ let lastBrowserComputeMode='auto';
   async function applyPhysicsComputeMode(){
    const selector=$('computeMode');let mode=selector?.value||'auto';
    const note=$('computeModeStatus'),sub=$('computeSub');
+   if(mode==='vulkan-rtx'){
+    const confirmed=window.confirm('VULKAN RTX MODE — HARDWARE WARNING\n\nUse this mode on a computer with a supported NVIDIA RTX graphics card and a Vulkan-capable driver. It requires the separate FrameLabs Vulkan helper to be running on this same computer. Continuing will connect only to 127.0.0.1:47653 and may trigger a browser loopback-access permission prompt. Allow it only if you started the FrameLabs Vulkan helper yourself.\n\nVulkan compute is separate from CUDA RTX Mode. Tensor Core cooperative-matrix support is detected independently; this mode must not claim Tensor Core acceleration unless a supported Tensor Core workload is actually dispatched. Structural analysis, collision resolution, and failure decisions remain CPU-side.\n\nContinue?');
+    if(!confirmed){if(selector)selector.value=lastBrowserComputeMode;return;}
+    if(selector)selector.disabled=true;
+    if(note)note.textContent='Connecting to the native Vulkan RTX helper on this computer…';
+    let result;
+    try{result=await window.FrameLabCompute?.connectVulkanRTX?.();}
+    catch(error){result={connected:false,reason:error?.message||'connection failed'};}
+    finally{if(selector)selector.disabled=false;}
+    if(!result?.connected){
+     const fallbackMode=lastBrowserComputeMode;
+     if(selector)selector.value=fallbackMode;
+     window.FrameLabCompute?.setMode(fallbackMode);
+     const message='Vulkan RTX Mode did not start. '+(result?.reason||'The local Vulkan helper is unavailable')+' Browser physics remains on '+fallbackMode.toUpperCase()+'.';
+     if(note)note.textContent=message;if(sub)sub.textContent=message;return;
+    }
+    const activeMode=window.FrameLabCompute?.setMode('vulkan-rtx');
+    if(activeMode!=='vulkan-rtx'){
+     const fallbackMode=lastBrowserComputeMode;
+     if(selector)selector.value=fallbackMode;
+     window.FrameLabCompute?.setMode(fallbackMode);
+     const message='Vulkan RTX Mode could not activate; the previous browser backend remains enabled.';
+     if(note)note.textContent=message;if(sub)sub.textContent=message;return;
+    }
+    if(note)note.textContent='Vulkan RTX Mode active · '+result.device+' · Vulkan '+result.apiVersion+'. '+(result.cooperativeMatrix?'Cooperative-matrix capability detected; live body integration is currently standard Vulkan compute.':'No cooperative-matrix extension reported; live body integration is standard Vulkan compute.')+' Structural analysis, contact resolution, fire/wind damage, and failure decisions remain CPU-side.';
+    if(sub)sub.textContent='Native Vulkan RTX · '+result.device+' · '+result.tensorCoreStatus+' · local loopback bridge';
+    return;
+   }
    if(mode==='rtx'){
     const confirmed=window.confirm('RTX MODE — HARDWARE WARNING\n\nUse this only on a computer with a supported NVIDIA RTX graphics card.\n\nRTX Mode also requires the FrameLabs native CUDA helper to be running on this same computer. Continuing will try to connect to 127.0.0.1 and may trigger a browser loopback-access permission prompt. Allow that request only if you started the FrameLabs RTX helper yourself.\n\nExperimental: live body-motion integration uses a CUDA kernel; structural analysis, collision resolution, and failure decisions remain CPU-side. The Tensor Core WMMA benchmark is separate from that motion kernel.\n\nContinue?');
     if(!confirmed){if(selector)selector.value=lastBrowserComputeMode;return;}
@@ -2694,6 +2722,15 @@ let lastBrowserComputeMode='auto';
    if(note)note.textContent=mode==='gpu'?'WebGPU performs body motion integration when available; failures fall back to CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='cpu'?'Live body motion integration is computed in the CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='main'?'Live motion integration stays on the main CPU thread. Use this as a compatibility/debug fallback.':'Auto uses the CPU worker unless real integration benchmarks show WebGPU is at least 15% faster; large batches then use GPU. GPU errors fall back to CPU. Structural analysis, contact resolution, and failure rules remain CPU-side.';
    if(sub)sub.textContent=note?.textContent||'CPU/GPU body integration with CPU structural solver';
   }
+  window.addEventListener('framelabs:vulkan-rtx-lost',event=>{
+   const selector=$('computeMode'),fallbackMode=lastBrowserComputeMode;
+   if(selector&&selector.value==='vulkan-rtx')selector.value=fallbackMode;
+   window.FrameLabCompute?.setMode(fallbackMode);
+   const reason=event?.detail?.reason||'the local Vulkan helper stopped responding';
+   const message='Vulkan RTX connection lost ('+reason+'). Returned to '+fallbackMode.toUpperCase()+' mode; the simulation continues with a browser backend.';
+   const note=$('computeModeStatus'),sub=$('computeSub');
+   if(note)note.textContent=message;if(sub)sub.textContent=message;
+  });
   window.addEventListener('framelabs:rtx-lost',event=>{
    const selector=$('computeMode');
    const fallbackMode=lastBrowserComputeMode;
