@@ -734,7 +734,7 @@
   async function integrateRTX(packed, dt) {
     if (!rtxConnected) throw new Error('RTX CUDA bridge is not connected');
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    const timeout = controller ? window.setTimeout(() => controller.abort(), 1500) : null;
+    const timeout = controller ? window.setTimeout(() => controller.abort(), 750) : null;
     try {
       const bytes = new Uint8Array(packed.buffer, packed.byteOffset, packed.byteLength);
       const response = await fetch(RTX_BRIDGE_URL + '/integrate', {

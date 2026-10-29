@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cmath>
 #include <cctype>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +39,7 @@
   #include <arpa/inet.h>
   #include <netinet/in.h>
   #include <sys/socket.h>
+  #include <sys/time.h>
   #include <unistd.h>
   using FrameLabSocket = int;
   static constexpr FrameLabSocket kFrameLabInvalidSocket = -1;
@@ -71,6 +73,20 @@ inline bool isAllowedOrigin(const std::string& origin) {
   if (origin == "http://localhost" || origin.rfind("http://localhost:", 0) == 0) return true;
   if (origin == "http://127.0.0.1" || origin.rfind("http://127.0.0.1:", 0) == 0) return true;
   return false;
+}
+
+inline void configureSocketTimeouts(FrameLabSocket socket) {
+#ifdef _WIN32
+  const DWORD timeoutMs = 3000;
+  setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
+             reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+  setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO,
+             reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+#else
+  const timeval timeout{3, 0};
+  setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
 }
 
 inline bool sendAll(FrameLabSocket socket, const char* data, std::size_t size) {
@@ -262,6 +278,12 @@ class BodyIntegrator {
     if (status != cudaSuccess) { error = cudaGetErrorString(status); return false; }
     status = cudaMemcpy(data.data(), deviceData_, bytes, cudaMemcpyDeviceToHost);
     if (status != cudaSuccess) { error = cudaGetErrorString(status); return false; }
+    for (float value : data) {
+      if (!std::isfinite(value)) {
+        error = "CUDA kernel returned a non-finite body state.";
+        return false;
+      }
+    }
     return true;
   }
 
@@ -284,6 +306,7 @@ inline bool parseDt(const std::string& text, float& dt) {
 
 inline void handleClient(FrameLabSocket client, BodyIntegrator& integrator,
                          const cudaDeviceProp& device, std::atomic<int>& activeClients) {
+  configureSocketTimeouts(client);
   std::string buffer;
   Request request;
   while (readRequest(client, buffer, request)) {
@@ -356,6 +379,10 @@ inline void handleClient(FrameLabSocket client, BodyIntegrator& integrator,
 }
 
 inline int runRTXBridgeServer() {
+#ifndef _WIN32
+  // A browser closing its local connection must not terminate the helper.
+  std::signal(SIGPIPE, SIG_IGN);
+#endif
   int deviceCount = 0;
   cudaError_t status = cudaGetDeviceCount(&deviceCount);
   if (status != cudaSuccess) {
