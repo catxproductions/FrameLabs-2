@@ -96,14 +96,14 @@
   }
   function ensureGPUBuffer(device, pool, key, requiredSize, usage, maxSize = Infinity) {
     if (!Number.isSafeInteger(requiredSize) || requiredSize <= 0) {
-      throw new RangeError('GPU buffer size must be a positive integer.');
+      throw new RangeError('error 000: GPU buffer size must be a positive integer.');
     }
     const hardLimit = Math.min(
       Number(device.limits?.maxBufferSize) || Infinity,
       Number(maxSize) || Infinity
     );
     if (requiredSize > hardLimit) {
-      throw new GPUBufferLimitError(`Requested GPU buffer (${requiredSize} bytes) exceeds this adapter's limit (${hardLimit} bytes).`, hardLimit);
+      throw new GPUBufferLimitError(`error 001: Requested GPU buffer (${requiredSize} bytes) exceeds this adapter's limit (${hardLimit} bytes).`, hardLimit);
     }
     const capacityKey = `${key}Capacity`;
     if (pool[key] && (pool[capacityKey] || 0) >= requiredSize) return pool[key];
@@ -161,7 +161,7 @@
   function failPending(error) {
     for (const [id, item] of pending) {
       pending.delete(id);
-      item.reject(error instanceof Error ? error : new Error(String(error || 'CPU worker failed')));
+      item.reject(error instanceof Error ? error : new Error(String(error || 'error 002: CPU worker failed')));
     }
   }
   function disableWorker(reason) {
@@ -173,7 +173,7 @@
       worker.terminate();
       worker = null;
     }
-    failPending(reason || new Error('CPU worker unavailable'));
+    failPending(reason || new Error('error 003: CPU worker unavailable'));
     backend = 'Main-thread fallback';
     setStatus(backend);
   }
@@ -192,9 +192,9 @@
       };
       worker.onerror = (event) => {
         event.preventDefault?.();
-        disableWorker(new Error(event.message || 'CPU worker crashed'));
+        disableWorker(new Error(event.message || 'error 004: CPU worker crashed'));
       };
-      worker.onmessageerror = () => disableWorker(new Error('CPU worker sent an unreadable message'));
+      worker.onmessageerror = () => disableWorker(new Error('error 005: CPU worker sent an unreadable message'));
       backend = 'Web Worker (CPU)';
     } catch (_) {
       worker = null;
@@ -206,9 +206,9 @@
     if (gpuDevice && gpuPipeline) return;
     if (gpuInitPromise) return gpuInitPromise;
     gpuInitPromise = (async () => {
-      if (!navigator.gpu) throw new Error('WebGPU unavailable');
+      if (!navigator.gpu) throw new Error('error 006: WebGPU unavailable');
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-      if (!adapter) throw new Error('No compatible GPU adapter');
+      if (!adapter) throw new Error('error 007: No compatible GPU adapter');
       const device = await adapter.requestDevice();
       const shader = device.createShaderModule({ code: `
         struct Entry { demand: f32, capacity: f32 };
@@ -291,7 +291,7 @@
   async function scanGPUUnlocked(demands, capacities) {
     await initGPU();
     const device = gpuDevice, pipeline = gpuPipeline;
-    if (!device || !pipeline) throw new Error('GPU not ready');
+    if (!device || !pipeline) throw new Error('error 008: GPU not ready');
     const count = demands.length;
     if (count === 0) return { backend: 'WebGPU compute', count: 0, maxUtil: 0, meanUtil: 0, overloaded: 0 };
 
@@ -390,13 +390,13 @@
   async function integrateGPUUnlocked(packed, dt) {
     await initGPU();
     const device = gpuDevice, pipeline = gpuIntegratePipeline;
-    if (!device || !pipeline) throw new Error('WebGPU physics pipeline is not ready');
+    if (!device || !pipeline) throw new Error('error 009: WebGPU physics pipeline is not ready');
     const count = packed.length / BODY_STRIDE;
     if (!count) return packed;
     const bytes = packed.byteLength;
     const maxStateBytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
     if (bytes > maxStateBytes) {
-      throw new GPUBufferLimitError("Physics batch exceeds this GPU adapter's storage-buffer limit", maxStateBytes);
+      throw new GPUBufferLimitError("error 010: Physics batch exceeds this GPU adapter's storage-buffer limit", maxStateBytes);
     }
     let mapped = false;
     // Reuse storage/uniform/readback buffers across fixed 120 Hz steps. Creating
@@ -508,24 +508,24 @@
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve: (message) => {
         if (!message || !(message.data instanceof ArrayBuffer)) {
-          reject(new Error('CPU worker returned an invalid constraint result')); return;
+          reject(new Error('error 011: CPU worker returned an invalid constraint result')); return;
         }
         const returnedNodeLength = Number.isInteger(message.nodeLength)
           ? message.nodeLength : message.data.byteLength / Float64Array.BYTES_PER_ELEMENT;
         if (returnedNodeLength !== nodeLength || returnedNodeLength * Float64Array.BYTES_PER_ELEMENT > message.data.byteLength) {
-          reject(new Error('CPU worker returned an invalid active constraint-node length')); return;
+          reject(new Error('error 012: CPU worker returned an invalid active constraint-node length')); return;
         }
         let returnedEdges = null;
         if (message.edges instanceof ArrayBuffer) {
           const returnedEdgeLength = Number.isInteger(message.edgeLength)
             ? message.edgeLength : message.edges.byteLength / Float64Array.BYTES_PER_ELEMENT;
           if (returnedEdgeLength !== edgeLength || returnedEdgeLength * Float64Array.BYTES_PER_ELEMENT > message.edges.byteLength) {
-            reject(new Error('CPU worker returned an invalid active constraint-edge length')); return;
+            reject(new Error('error 013: CPU worker returned an invalid active constraint-edge length')); return;
           }
           returnedEdges = new Float64Array(message.edges, 0, returnedEdgeLength);
         }
         if (canTransfer && !returnedEdges) {
-          reject(new Error('CPU worker did not return the transferred constraint-edge buffer')); return;
+          reject(new Error('error 014: CPU worker did not return the transferred constraint-edge buffer')); return;
         }
         computeStats.workerConstraintCalls++;
         if (String(message.backend || '').includes('C++ WebAssembly')) computeStats.wasmConstraintCalls++;
@@ -562,7 +562,7 @@
   async function resolveDebrisPairs(bodies, pairs, moisture = 0, options = {}) {
     if (!(bodies instanceof Float64Array) || bodies.length % 19 !== 0 ||
         !(pairs instanceof Uint32Array) || pairs.length % 2 !== 0) {
-      throw new TypeError('Debris collision solve requires 19-value Float64 bodies and uint32 index pairs.');
+      throw new TypeError('error 015: Debris collision solve requires 19-value Float64 bodies and uint32 index pairs.');
     }
     if (!pairs.length || physicsMode === 'main' || !worker) return null;
     const expectedBodyLength = bodies.length, expectedPairLength = pairs.length;
@@ -615,7 +615,7 @@
 
   async function projectConstraints(nodes, edges, iterations, options = {}) {
     if (!(nodes instanceof Float64Array) || nodes.length % 5 !== 0 || !(edges instanceof Float64Array) || edges.length % 4 !== 0) {
-      throw new TypeError('Constraint projection requires Float64 node state (5 values per node) and edge state (4 values per link).');
+      throw new TypeError('error 016: Constraint projection requires Float64 node state (5 values per node) and edge state (4 values per link).');
     }
     for (let i = 0; i < nodes.length; i++) if (!Number.isFinite(nodes[i])) nodes[i] = 0;
     for (let i = 0; i < edges.length; i++) if (!Number.isFinite(edges[i])) edges[i] = 0;
@@ -651,13 +651,13 @@
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve: (message) => {
         if (!message || !(message.data instanceof ArrayBuffer || ArrayBuffer.isView(message.data))) {
-          reject(new Error('CPU worker returned an invalid physics result')); return;
+          reject(new Error('error 017: CPU worker returned an invalid physics result')); return;
         }
         let data;
         if (message.data instanceof ArrayBuffer) {
           const length = Number.isInteger(message.length) ? message.length : message.data.byteLength / Float32Array.BYTES_PER_ELEMENT;
           if (length < 0 || length > message.data.byteLength / Float32Array.BYTES_PER_ELEMENT || length % BODY_STRIDE !== 0) {
-            reject(new Error('CPU worker returned an invalid active body length')); return;
+            reject(new Error('error 018: CPU worker returned an invalid active body length')); return;
           }
           data = new Float32Array(message.data, 0, length);
           computeStats.transferredBytes += message.data.byteLength;
@@ -665,7 +665,7 @@
           data = new Float32Array(message.data);
         }
         if (data.length !== activeLength) {
-          reject(new Error('CPU worker returned an unexpected body count')); return;
+          reject(new Error('error 019: CPU worker returned an unexpected body count')); return;
         }
         computeStats.workerIntegrationCalls++;
         if (String(message.backend || '').includes('C++ WebAssembly')) computeStats.wasmIntegrationCalls++;
@@ -682,7 +682,7 @@
       if (worker) disableWorker(error);
       // A transferred buffer is no longer readable after a worker crash. The caller
       // can repack state from its authoritative objects and ask the CPU fallback to retry.
-      if (canTransfer) return { data: null, backend: 'CPU worker lost; repack required' };
+      if (canTransfer) return { data: null, backend: 'error 020: CPU worker lost; repack required' };
       computeStats.mainThreadIntegrationCalls++;
       computeStats.lastIntegrationBackend = 'Main-thread CPU fallback';
       return { data: integrateCPU(new Float32Array(packed), dt), backend: 'Main-thread CPU fallback' };
@@ -702,11 +702,11 @@
         targetAddressSpace: 'loopback',
         signal: controller?.signal
       });
-      if (!response.ok) throw new Error('local helper returned HTTP ' + response.status);
+      if (!response.ok) throw new Error('error 021: local helper returned HTTP ' + response.status);
       const info = await response.json();
       if (info?.ok !== true || !String(info.device || '').toUpperCase().includes('RTX') ||
           !Array.isArray(info.supports) || !info.supports.includes('body-integration')) {
-        throw new Error('the local helper did not identify a supported RTX GPU/body-integration service');
+        throw new Error('error 022: the local helper did not identify a supported RTX GPU/body-integration service');
       }
       rtxConnected = true;
       rtxDeviceInfo = {
@@ -720,11 +720,11 @@
       rtxConnected = false;
       rtxDeviceInfo = null;
       const reason = error?.name === 'AbortError'
-        ? 'connection timed out'
-        : (error?.message || 'connection failed');
+        ? 'error 023: connection timed out'
+        : (error?.message || 'error 024: connection failed');
       return {
         connected: false,
-        reason: 'Could not reach the local RTX CUDA helper (' + reason + '). Build and run the native helper with --serve, then allow loopback access for FrameLabs 2.'
+        reason: 'error 025: Could not reach the local RTX CUDA helper (' + reason + '). Build and run the native helper with --serve, then allow loopback access for FrameLabs 2.'
       };
     } finally {
       if (timeout !== null) window.clearTimeout(timeout);
@@ -732,7 +732,7 @@
   }
 
   async function integrateRTX(packed, dt) {
-    if (!rtxConnected) throw new Error('RTX CUDA bridge is not connected');
+    if (!rtxConnected) throw new Error('error 026: RTX CUDA bridge is not connected');
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timeout = controller ? window.setTimeout(() => controller.abort(), 750) : null;
     try {
@@ -751,12 +751,12 @@
       });
       if (!response.ok) {
         const detail = (await response.text()).trim();
-        throw new Error(detail || 'local CUDA helper returned HTTP ' + response.status);
+        throw new Error(detail || 'error 027: local CUDA helper returned HTTP ' + response.status);
       }
       const resultBytes = await response.arrayBuffer();
       if (resultBytes.byteLength !== packed.byteLength ||
           resultBytes.byteLength % (BODY_STRIDE * Float32Array.BYTES_PER_ELEMENT) !== 0) {
-        throw new Error('local CUDA helper returned a body buffer with an unexpected size');
+        throw new Error('error 028: local CUDA helper returned a body buffer with an unexpected size');
       }
       packed.set(new Float32Array(resultBytes));
       return packed;
@@ -767,10 +767,10 @@
 
   async function integrateBodies(packed, dt, options = {}) {
     if (!(packed instanceof Float32Array) || packed.length % BODY_STRIDE !== 0) {
-      throw new TypeError(`Physics integration requires a Float32Array with ${BODY_STRIDE} values per body.`);
+      throw new TypeError(`error 029: Physics integration requires a Float32Array with ${BODY_STRIDE} values per body.`);
     }
-    if (!Number.isFinite(Number(dt)) || dt < 0 || dt > 0.05) throw new RangeError('Physics dt must be between 0 and 0.05 seconds.');
-    if (packed.length === 0) return { data: packed, backend: 'No dynamic bodies' };
+    if (!Number.isFinite(Number(dt)) || dt < 0 || dt > 0.05) throw new RangeError('error 030: Physics dt must be between 0 and 0.05 seconds.');
+    if (packed.length === 0) return { data: packed, backend: 'error 031: No dynamic bodies' };
     for (let i = 0; i < packed.length; i++) if (!Number.isFinite(packed[i])) packed[i] = 0;
     const transferOwnership = options && options.transferOwnership === true;
     const count = packed.length / BODY_STRIDE;
@@ -788,17 +788,17 @@
           rtxConnected = false;
           rtxDeviceInfo = null;
           computeStats.rtxFallbacks++;
-          const reason = error?.name === 'AbortError' ? 'CUDA request timed out' : (error?.message || 'bridge connection failed');
-          setRuntimeStatus('RTX bridge lost · CPU fallback · ' + reason);
+          const reason = error?.name === 'AbortError' ? 'error 032: CUDA request timed out' : (error?.message || 'error 033: bridge connection failed');
+          setRuntimeStatus('error 034: RTX bridge lost · CPU fallback · ' + reason);
           if (!rtxFailureReported) {
             rtxFailureReported = true;
-            window.dispatchEvent(new CustomEvent('framelabs:rtx-lost', { detail: { reason } }));
+            window.dispatchEvent(new CustomEvent('error 035: framelabs:rtx-lost', { detail: { reason } }));
           }
         }
       }
       const fallback = await integrateWorker(packed, dt, transferOwnership);
       if (!fallback.data) return { data: null, backend: fallback.backend, retryRequired: true };
-      physicsBackend = 'RTX unavailable · ' + fallback.backend;
+      physicsBackend = 'error 036: RTX unavailable · ' + fallback.backend;
       backend = physicsBackend;
       setRuntimeStatus(physicsBackend + ' · ' + count + ' bodies');
       return { data: fallback.data, backend: physicsBackend };
@@ -826,11 +826,11 @@
             ? Math.floor(reportedLimit / strideBytes) * strideBytes
             : Math.max(0, packed.byteLength - strideBytes);
           gpuBodyLimitBytes = Math.min(gpuBodyLimitBytes, Math.max(0, safeLimit));
-          setRuntimeStatus('WebGPU batch exceeds adapter limit; using CPU for this batch');
+          setRuntimeStatus('error 037: WebGPU batch exceeds adapter limit; using CPU for this batch');
         } else {
           gpuState = 'unavailable'; gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
           autoPreferGPU = false; autoGPUThreshold = Infinity; gpuBodyLimitBytes = Infinity; clearGPUBufferPools();
-          if (physicsMode === 'gpu') setStatus(`WebGPU failed; using CPU · ${error?.message || 'GPU error'}`);
+          if (physicsMode === 'gpu') setStatus(`error 038: WebGPU failed; using CPU · ${error?.message || 'GPU error'}`);
         }
       }
     }
