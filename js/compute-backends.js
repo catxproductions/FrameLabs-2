@@ -1052,7 +1052,8 @@
     if (requested === 'vulkan-rtx' && !vulkanRTXConnected) {
       setStatus('Vulkan RTX helper not connected · existing backend retained');
       return physicsMode;
-    }\n    if (requested === 'rtx' && !rtxConnected) {
+    }
+    if (requested === 'rtx' && !rtxConnected) {
       setStatus('RTX CUDA helper not connected · existing backend retained');
       return physicsMode;
     }
