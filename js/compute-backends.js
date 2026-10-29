@@ -187,7 +187,10 @@
         const item = pending.get(data.id);
         if (!item) return;
         pending.delete(data.id);
-        if (data.error) item.reject(new Error(data.error));
+        if (data.error) {
+          const workerError = String(data.error);
+          item.reject(new Error(/^error \d{3}:/.test(workerError) ? workerError : 'error 039: ' + workerError));
+        }
         else item.resolve(data);
       };
       worker.onerror = (event) => {
@@ -751,7 +754,9 @@
       });
       if (!response.ok) {
         const detail = (await response.text()).trim();
-        throw new Error(detail || 'error 027: local CUDA helper returned HTTP ' + response.status);
+        throw new Error(detail
+          ? (/^error \\d{3}:/.test(detail) ? detail : 'error 027: ' + detail)
+          : 'error 027: local CUDA helper returned HTTP ' + response.status);
       }
       const resultBytes = await response.arrayBuffer();
       if (resultBytes.byteLength !== packed.byteLength ||
@@ -770,7 +775,7 @@
       throw new TypeError(`error 029: Physics integration requires a Float32Array with ${BODY_STRIDE} values per body.`);
     }
     if (!Number.isFinite(Number(dt)) || dt < 0 || dt > 0.05) throw new RangeError('error 030: Physics dt must be between 0 and 0.05 seconds.');
-    if (packed.length === 0) return { data: packed, backend: 'error 031: No dynamic bodies' };
+    if (packed.length === 0) return { data: packed, backend: 'No dynamic bodies' };
     for (let i = 0; i < packed.length; i++) if (!Number.isFinite(packed[i])) packed[i] = 0;
     const transferOwnership = options && options.transferOwnership === true;
     const count = packed.length / BODY_STRIDE;
@@ -792,13 +797,13 @@
           setRuntimeStatus('error 034: RTX bridge lost · CPU fallback · ' + reason);
           if (!rtxFailureReported) {
             rtxFailureReported = true;
-            window.dispatchEvent(new CustomEvent('error 035: framelabs:rtx-lost', { detail: { reason } }));
+            window.dispatchEvent(new CustomEvent('framelabs:rtx-lost', { detail: { reason } }));
           }
         }
       }
       const fallback = await integrateWorker(packed, dt, transferOwnership);
       if (!fallback.data) return { data: null, backend: fallback.backend, retryRequired: true };
-      physicsBackend = 'error 036: RTX unavailable · ' + fallback.backend;
+      physicsBackend = 'RTX unavailable · ' + fallback.backend;
       backend = physicsBackend;
       setRuntimeStatus(physicsBackend + ' · ' + count + ' bodies');
       return { data: fallback.data, backend: physicsBackend };
@@ -937,7 +942,7 @@
       }
       return { available: false, count: null, cpuAverageMs: null, gpuAverageMs: null,
         preferGPU: false, autoGPUThreshold: null,
-        reason: `CPU/GPU physics benchmark failed; Auto selects CPU worker (${error?.message || 'compute error'})` };
+        reason: `error 041: CPU/GPU physics benchmark failed; Auto selects CPU worker (${error?.message || 'compute error'})` };
     }
   }
 
@@ -974,7 +979,7 @@
 
   async function scan(demands, capacities) {
     if (!demands || !capacities || typeof demands.length !== 'number' || demands.length !== capacities.length) {
-      throw new TypeError('FrameLab compute scan requires equal-length demand and capacity arrays.');
+      throw new TypeError('error 040: FrameLab compute scan requires equal-length demand and capacity arrays.');
     }
     if (demands.length >= GPU_THRESHOLD && navigator.gpu && gpuState !== 'unavailable') {
       try {
@@ -1024,7 +1029,7 @@
         gpuDevice = null; gpuPipeline = null; gpuIntegratePipeline = null; gpuInitPromise = null;
         clearGPUBufferPools();
       }
-      return { available: false, averageMs: null, throughput: 0, reason: `GPU scan unavailable: ${error?.message || 'initialization failed'}` };
+      return { available: false, averageMs: null, throughput: 0, reason: `error 042: GPU scan unavailable: ${error?.message || 'initialization failed'}` };
     }
   }
 
