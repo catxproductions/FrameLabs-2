@@ -28,11 +28,10 @@ namespace wmma = nvcuda::wmma;
 // integration should only route suitable dense workloads through this API.
 __global__ void tensorCoreMatmul(const half* a, const half* b, float* c,
                                  int matrixSize) {
-  const int tileRow = (blockIdx.y * blockDim.y + threadIdx.y) * wmma::M;
-  const int tileCol = (blockIdx.x * blockDim.x + threadIdx.x) * wmma::N;
-
-  // One warp cooperatively computes one 16x16 output tile.
-  if (threadIdx.x != 0 || threadIdx.y != 0) return;
+  // Every lane in this warp must participate in each WMMA operation.
+  // One 32-thread block cooperatively computes one 16x16 output tile.
+  const int tileRow = blockIdx.y * wmma::M;
+  const int tileCol = blockIdx.x * wmma::N;
   if (tileRow >= matrixSize || tileCol >= matrixSize) return;
 
   wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> aFrag;
