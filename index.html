@@ -208,7 +208,7 @@
         </div>
         <div class="field">
           <label for="computeMode">Physics compute</label>
-          <select id="computeMode"><option value="auto" selected>Auto · CPU worker / GPU</option><option value="cpu">CPU worker</option><option value="gpu">WebGPU · CPU fallback</option><option value="main">Main-thread CPU</option><option value="rtx">RTX Mode · Native CUDA helper</option></select>
+          <select id="computeMode"><option value="auto" selected>Auto · CPU worker / GPU</option><option value="cpu">CPU worker</option><option value="gpu">WebGPU · CPU fallback</option><option value="main">Main-thread CPU</option><option value="rtx">RTX Mode · Native CUDA helper</option><option value="vulkan-rtx">Vulkan RTX Mode · Native Vulkan helper</option></select>
           <p id="computeModeStatus" class="environment-note" aria-live="polite">Auto benchmarks multiple motion-batch sizes and uses WebGPU only when it measurably beats the CPU worker; GPU buffers and motion-packing storage are reused. Structural analysis and collision/failure decisions remain CPU-side.</p>
         </div>
       </div>
