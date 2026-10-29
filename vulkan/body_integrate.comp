@@ -1,0 +1,9 @@
+#version 450
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) buffer BodyState { float v[]; } bodies;
+layout(push_constant) uniform Params { uint count; float dt; } p;
+void main(){uint i=gl_GlobalInvocationID.x;if(i>=p.count)return;uint b=i*13u;float dt=clamp(p.dt,0.0,0.05);
+float mx=max(0.0,bodies.v[b+10u]),my=max(0.0,bodies.v[b+11u]),mo=max(0.0,bodies.v[b+12u]);
+float vx=clamp(bodies.v[b+2u]+bodies.v[b+4u]*dt,-mx,mx),vy=clamp(bodies.v[b+3u]+bodies.v[b+5u]*dt,-my,my);
+float omega=clamp(bodies.v[b+7u]+bodies.v[b+8u]*dt,-mo,mo)*clamp(bodies.v[b+9u],0.0,1.0);
+bodies.v[b+2u]=vx;bodies.v[b+3u]=vy;bodies.v[b]+=vx*dt;bodies.v[b+1u]+=vy*dt;bodies.v[b+7u]=omega;bodies.v[b+6u]+=omega*dt;}
