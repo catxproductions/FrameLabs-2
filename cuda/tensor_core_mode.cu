@@ -18,12 +18,12 @@ namespace wmma = nvcuda::wmma;
   const cudaError_t error = (call); \
   if (error != cudaSuccess) { \
     std::cerr << "CUDA error: " << cudaGetErrorString(error) \
-              << " at " << __FILE__ << ":" << __LINE__ << "\n"; \
+              << " at " << __FILE__ << ":" << __LINE__ << "\\n"; \
     return 1; \
   } \
 } while (0)
 
-// Separate native CUDA mode prototype. It does not replace the browser solver.
+// Separate native RTX Mode prototype. It does not replace the browser solver.
 // WMMA computes a dense matrix product using Tensor Cores; future physics
 // integration should only route suitable dense workloads through this API.
 __global__ void tensorCoreMatmul(const half* a, const half* b, float* c,
@@ -54,9 +54,9 @@ int main(int argc, char** argv) {
   if (argc > 1) {
     char* end = nullptr;
     const long parsed = std::strtol(argv[1], &end, 10);
-    if (!end || *end != '\0' || parsed < 16 || parsed > 8192 ||
+    if (!end || *end != '\\0' || parsed < 16 || parsed > 8192 ||
         parsed % 16 != 0) {
-      std::cerr << "Usage: framelabs_cuda_mode [matrix-size-multiple-of-16]\n";
+      std::cerr << "Usage: framelabs_rtx_mode [matrix-size-multiple-of-16]\\n";
       return 2;
     }
     n = static_cast<int>(parsed);
@@ -65,14 +65,14 @@ int main(int argc, char** argv) {
   int deviceCount = 0;
   CUDA_CHECK(cudaGetDeviceCount(&deviceCount));
   if (deviceCount == 0) {
-    std::cerr << "No CUDA-capable NVIDIA GPU was found.\n";
+    std::cerr << "No CUDA-capable NVIDIA GPU was found.\\n";
     return 2;
   }
 
   cudaDeviceProp device{};
   CUDA_CHECK(cudaGetDeviceProperties(&device, 0));
   if (device.major < 7) {
-    std::cerr << "This WMMA Tensor Core prototype requires compute capability 7.0+.\n";
+    std::cerr << "This WMMA Tensor Core prototype requires compute capability 7.0+.\\n";
     return 2;
   }
   CUDA_CHECK(cudaSetDevice(0));
@@ -89,9 +89,9 @@ int main(int argc, char** argv) {
 
   half *deviceA = nullptr, *deviceB = nullptr;
   float* deviceC = nullptr;
-  CUDA_CHECK(cudaMalloc(&deviceA, elements * sizeof(half)));
-  CUDA_CHECK(cudaMalloc(&deviceB, elements * sizeof(half)));
-  CUDA_CHECK(cudaMalloc(&deviceC, elements * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&deviceA), elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&deviceB), elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&deviceC), elements * sizeof(float)));
   CUDA_CHECK(cudaMemcpy(deviceA, hostA.data(), elements * sizeof(half), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(deviceB, hostB.data(), elements * sizeof(half), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemset(deviceC, 0, elements * sizeof(float)));
@@ -114,14 +114,14 @@ int main(int argc, char** argv) {
   // Lightweight sanity check: C must contain finite values.
   const bool finite = std::all_of(hostC.begin(), hostC.end(),
                                   [](float v) { return std::isfinite(v); });
-  std::cout << "FrameLabs 2 — Native CUDA Tensor Core Mode (prototype)\n"
+  std::cout << "FrameLabs 2 — RTX Mode (experimental prototype)\\n"
             << "GPU: " << device.name << " (compute " << device.major << "."
-            << device.minor << ")\n"
-            << "Matrix: " << n << " x " << n << "\n"
-            << "WMMA kernel time: " << elapsedMs << " ms\n"
-            << "Result sanity check: " << (finite ? "PASS" : "FAIL") << "\n"
+            << device.minor << ")\\n"
+            << "Matrix: " << n << " x " << n << "\\n"
+            << "WMMA kernel time: " << elapsedMs << " ms\\n"
+            << "Result sanity check: " << (finite ? "PASS" : "FAIL") << "\\n"
             << "Note: this benchmarks Tensor Core matrix math; it is not yet "
-               "connected to live FrameLabs structural physics.\n";
+               "connected to live FrameLabs structural physics.\\n";
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));
