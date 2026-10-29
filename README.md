@@ -29,13 +29,29 @@ Start with the [beginner material guide](js/MATERIALS_GUIDE.md). The guide expla
 
 ## CPU worker and WebGPU physics integration
 
-- The **Physics compute** selector offers Auto, CPU worker, WebGPU (with CPU fallback), and main-thread CPU compatibility modes.
+- The **Physics compute** selector offers Auto, CPU worker, WebGPU (with CPU fallback), main-thread CPU compatibility, and an opt-in native RTX CUDA mode.
 - `js/compute-worker.js` performs live batched semi-implicit integration of structural-node and debris positions, velocities, and angular state off the main thread. It also runs ordered Gauss-Seidel member-length constraint iterations and the follow-up velocity projection, and retains the demand/capacity diagnostic scan.
 - `js/compute-backends.js` routes motion integration to the persistent CPU worker or WebGPU. Auto mode benchmarks 256, 1,024, and 4,096-body batches and enables GPU integration only from a measured crossover where WebGPU is at least 15% faster at that size and all larger tested sizes. It does not assume that an available GPU is always faster.
 - WebGPU state, uniform, and readback buffers are reused across fixed 120 Hz substeps instead of being created and destroyed for each batch. Readback is still required because the authoritative structural solver consumes the updated state on the CPU, so tiny batches can still favor the worker.
 - Motion packing reuses typed-array scratch buffers. The CPU worker returns the same transferred body buffer in place, including a length for the active portion of a larger scratch buffer; this avoids an extra worker-side output allocation. The main-thread path rebuilds state and retries CPU integration if a transferred worker job fails.
-- Force assembly, material/environment calculations, structural analysis and load-path propagation, member-failure rules, and impact damage/fragmentation decisions remain in JavaScript on the CPU. The ordered member-constraint pass runs in the CPU worker, body integration can run in the worker or WebGPU, and larger debris-pair batches can use the C++/WebAssembly contact kernel in that worker. WebGPU currently handles body integration and the demand/capacity scan, not debris collision solving or structural/failure analysis.
+- Force assembly, material/environment calculations, structural analysis and load-path propagation, member-failure rules, and impact damage/fragmentation decisions remain in JavaScript on the CPU. The ordered member-constraint pass runs in the CPU worker, body integration can run in the worker, WebGPU, or the optional native RTX CUDA bridge, and larger debris-pair batches can use the C++/WebAssembly contact kernel in that worker. GPU-backed body integration does not replace structural or collision/failure decisions.
 - GPU initialization/dispatch errors degrade to CPU worker and then a main-thread CPU implementation if a worker is unavailable. Over-limit GPU batches fall back to CPU for those batch sizes without permanently disabling smaller GPU batches. Hot-path status updates are coalesced to four per second, and catch-up physics work yields to the next animation frame so the browser gets time to paint and process input. Worker URLs are resolved relative to the backend script for GitHub Pages subpaths.
+
+## Experimental RTX Mode (native CUDA)
+
+RTX Mode connects the browser game to a separate native helper running on the same PC. It requires a supported NVIDIA RTX GPU and a CUDA Toolkit/compiler. Build it from the repository root:
+
+\`\`\`sh
+cmake -S cuda -B build/cuda -DCMAKE_CUDA_ARCHITECTURES=89
+cmake --build build/cuda --config Release
+./build/cuda/framelabs_rtx_mode --serve
+\`\`\`
+
+On Windows, the executable may be at \`build/cuda/Release/framelabs_rtx_mode.exe\`; run it with \`--serve\` and keep the terminal open. Then open the FrameLabs 2 GitHub Pages site and choose **Physics compute → RTX Mode**. The site checks the local helper only after selection and may request browser loopback/local-network permission. Approve access only if you launched the FrameLabs helper yourself.
+
+The helper listens exclusively on \`127.0.0.1:47652\`, permits the FrameLabs GitHub Pages origin and localhost development origins, and does not listen on a LAN address. RTX Mode sends moving-body state to a CUDA kernel for position/velocity/rotation integration. If the helper disappears, the selector returns to the previous browser mode.
+
+The live motion kernel uses ordinary CUDA parallel arithmetic; the independent Tensor Core WMMA benchmark uses \`#include <mma.h>\`. The live per-body operation is not a dense matrix multiplication, so the WMMA benchmark is not falsely presented as accelerating real physics. Structural analysis, wind/fire damage, collisions, and member-failure decisions remain on CPU. Network transfer and memory-copy overhead may outweigh CUDA gains on smaller batches. This mode is experimental until built and profiled on an actual RTX computer.
 
 ## Pre-calculation and replay
 
