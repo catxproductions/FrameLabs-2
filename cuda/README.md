@@ -6,9 +6,11 @@ worker, or WebGPU fallback. The browser game continues to work without RTX Mode.
 
 The prototype uses CUDA WMMA via `#include <mma.h>` to run a dense
 half-precision matrix multiplication with FP32 accumulation on Tensor Cores.
-The program warms up the kernel, reports GPU kernel time (not end-to-end
-simulation time), checks that outputs are finite, and compares five output
-cells with a CPU reference. These are useful smoke checks, not a substitute
+The program warms up the kernel, measures multiple launches (10 by default),
+reports average GPU kernel time and approximate matrix throughput (not
+end-to-end simulation performance), checks that outputs are finite, and
+compares five output cells with a CPU reference. Use `--help` to see the
+supported command-line arguments. These are useful smoke checks, not a substitute
 for compiling and testing on each target GPU. This is a foundation and
 hardware/build check for a future native physics backend, not a claim that
 Tensor Cores currently accelerate live building
@@ -32,10 +34,12 @@ cmake -S cuda -B build/cuda -DCMAKE_CUDA_ARCHITECTURES=89
 cmake --build build/cuda --config Release
 ```
 
-Run the matrix benchmark (size must be a multiple of 16, between 16 and 8192):
+Run the matrix benchmark (size must be a multiple of 16, between 16 and 8192;
+optional measured launch count is 1–1000, default 10):
 
 ```sh
-./build/cuda/framelabs_rtx_mode 1024
+./build/cuda/framelabs_rtx_mode 1024 10
+./build/cuda/framelabs_rtx_mode --help
 ```
 
 On Windows, the executable may be under `build/cuda/Release/`.

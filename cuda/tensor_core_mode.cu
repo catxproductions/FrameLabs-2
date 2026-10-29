@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace wmma = nvcuda::wmma;
@@ -79,15 +80,36 @@ bool validateSamples(const std::vector<half>& a,
 
 int main(int argc, char** argv) {
   int n = 1024;
+  int iterations = 10;
+  if (argc > 1 && (std::string(argv[1]) == "--help" ||
+                   std::string(argv[1]) == "-h")) {
+    std::cout << "Usage: framelabs_rtx_mode [matrix-size-multiple-of-16] [iterations]\n"
+              << "  matrix size: 16..8192, multiple of 16 (default 1024)\n"
+              << "  iterations:  1..1000 measured launches (default 10)\n";
+    return 0;
+  }
+  if (argc > 3) {
+    std::cerr << "Too many arguments. Use --help for usage.\n";
+    return 2;
+  }
   if (argc > 1) {
     char* end = nullptr;
     const long parsed = std::strtol(argv[1], &end, 10);
     if (!end || *end != '\0' || parsed < 16 || parsed > 8192 ||
         parsed % 16 != 0) {
-      std::cerr << "Usage: framelabs_rtx_mode [matrix-size-multiple-of-16]\n";
+      std::cerr << "Invalid matrix size. Use --help for valid values.\n";
       return 2;
     }
     n = static_cast<int>(parsed);
+  }
+  if (argc > 2) {
+    char* end = nullptr;
+    const long parsed = std::strtol(argv[2], &end, 10);
+    if (!end || *end != '\0' || parsed < 1 || parsed > 1000) {
+      std::cerr << "Invalid iteration count. Use --help for valid values.\n";
+      return 2;
+    }
+    iterations = static_cast<int>(parsed);
   }
 
   int deviceCount = 0;
@@ -136,12 +158,15 @@ int main(int argc, char** argv) {
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&stop));
   CUDA_CHECK(cudaEventRecord(start));
-  tensorCoreMatmul<<<grid, block>>>(deviceA, deviceB, deviceC, n);
-  CUDA_CHECK(cudaGetLastError());
+  for (int iteration = 0; iteration < iterations; ++iteration) {
+    tensorCoreMatmul<<<grid, block>>>(deviceA, deviceB, deviceC, n);
+    CUDA_CHECK(cudaGetLastError());
+  }
   CUDA_CHECK(cudaEventRecord(stop));
   CUDA_CHECK(cudaEventSynchronize(stop));
-  float elapsedMs = 0.0f;
-  CUDA_CHECK(cudaEventElapsedTime(&elapsedMs, start, stop));
+  float totalElapsedMs = 0.0f;
+  CUDA_CHECK(cudaEventElapsedTime(&totalElapsedMs, start, stop));
+  const float averageElapsedMs = totalElapsedMs / iterations;
   CUDA_CHECK(cudaMemcpy(hostC.data(), deviceC, elements * sizeof(float), cudaMemcpyDeviceToHost));
 
   const bool finite = std::all_of(hostC.begin(), hostC.end(),
@@ -151,8 +176,16 @@ int main(int argc, char** argv) {
             << "GPU: " << device.name << " (compute " << device.major << "."
             << device.minor << ")\n"
             << "Matrix: " << n << " x " << n << "\n"
-            << "WMMA kernel time (after warm-up): " << elapsedMs << " ms\n"
-            << "Finite output check: " << (finite ? "PASS" : "FAIL") << "\n"
+            << "Measured launches: " << iterations << "\n"
+            << "Average WMMA kernel time (after warm-up): " << averageElapsedMs << " ms\n"
+            << "Approx. matrix throughput: ";
+  if (averageElapsedMs > 0.0f) {
+    std::cout << (2.0 * static_cast<double>(n) * n * n /
+                  (averageElapsedMs * 1.0e-3) / 1.0e12) << " TFLOP/s\n";
+  } else {
+    std::cout << "unavailable (timer resolution)\n";
+  }
+  std::cout << "Finite output check: " << (finite ? "PASS" : "FAIL") << "\n"
             << "CPU sample comparison: " << (samplesPass ? "PASS" : "FAIL") << "\n"
             << "Note: this benchmarks Tensor Core matrix math; it is not yet "
                "connected to live FrameLabs structural physics.\n";
