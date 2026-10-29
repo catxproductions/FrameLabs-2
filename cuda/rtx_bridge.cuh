@@ -324,7 +324,7 @@ inline void handleClient(FrameLabSocket client, BodyIntegrator& integrator,
               << "Access-Control-Max-Age: 600\r\n"
               << "Connection: " << (closeConnection ? "close" : "keep-alive") << "\r\n";
       if (!origin.empty()) headers << "Access-Control-Allow-Origin: " << origin << "\r\nVary: Origin\r\n"
-                                   << "Access-Control-Allow-Private-Network: true\r\n";
+;
       headers << "\r\n";
       response = headers.str();
     } else if (request.method == "GET" && request.path == "/health") {
