@@ -2586,25 +2586,63 @@ overlayToggle?.addEventListener('click',()=>setSimulationOverlays(!showSimulatio
 document.addEventListener('keydown',e=>{if(e.code!=='KeyO'||e.repeat||e.altKey||e.ctrlKey||e.metaKey)return;const target=e.target,tag=(target?.tagName||'').toLowerCase();if(target?.isContentEditable||['input','select','textarea','button'].includes(tag))return;e.preventDefault();setSimulationOverlays(!showSimulationOverlays)});
 $('qualityPreset')?.addEventListener('change',e=>{const selected=e.target.value;qualityMode=selected==='auto'?'auto':selected;if(selected==='auto'){runPerformanceBenchmark()}else{applyQualityProfile(selected);const status=$('qualityStatus');if(status)status.textContent=`Manual ${QUALITY_PROFILE.label} preset. CPU probe does not override manual quality.`}});
 let lastBrowserComputeMode='auto';
- function applyPhysicsComputeMode(){
-  const selector=$('computeMode');let mode=selector?.value||'auto';
-  if(mode==='rtx'){
-   const confirmed=window.confirm('RTX MODE — HARDWARE WARNING\n\nThis experimental mode is intended only for computers with a supported NVIDIA RTX graphics card. Non-RTX hardware may not support it.\n\nImportant: the native CUDA prototype is not yet connected to the live browser simulation and cannot run inside this browser page. Continue to view the prototype limitation?');
-   if(!confirmed){if(selector)selector.value=lastBrowserComputeMode;return;}
-   if(selector)selector.value=lastBrowserComputeMode;
-   const note=$('computeModeStatus');
-   if(note)note.textContent='RTX Mode acknowledged. The native CUDA Tensor Core prototype requires a desktop CUDA build and is not yet connected to live browser physics; the browser simulation remains on '+lastBrowserComputeMode.toUpperCase()+'. See cuda/README.md for native build instructions.';
-   const sub=$('computeSub');if(sub&&note)sub.textContent=note.textContent;
-   return;
+  async function applyPhysicsComputeMode(){
+   const selector=$('computeMode');let mode=selector?.value||'auto';
+   const note=$('computeModeStatus'),sub=$('computeSub');
+   if(mode==='rtx'){
+    const confirmed=window.confirm('RTX MODE — HARDWARE WARNING\n\nUse this only on a computer with a supported NVIDIA RTX graphics card.\n\nRTX Mode also requires the FrameLabs native CUDA helper to be running on this same computer. Continuing will try to connect to 127.0.0.1 and may trigger a browser loopback-access permission prompt. Allow that request only if you started the FrameLabs RTX helper yourself.\n\nExperimental: live body-motion integration uses a CUDA kernel; structural analysis, collision resolution, and failure decisions remain CPU-side. The Tensor Core WMMA benchmark is separate from that motion kernel.\n\nContinue?');
+    if(!confirmed){if(selector)selector.value=lastBrowserComputeMode;return;}
+    if(selector)selector.disabled=true;
+    if(note)note.textContent='Connecting to the native RTX CUDA helper on this computer…';
+    let result;
+    try{
+     result=await window.FrameLabCompute?.connectRTX?.();
+    }catch(error){
+     result={connected:false,reason:error?.message||'connection failed'};
+    }finally{
+     if(selector)selector.disabled=false;
+    }
+    if(!result?.connected){
+     const fallbackMode=lastBrowserComputeMode;
+     if(selector)selector.value=fallbackMode;
+     window.FrameLabCompute?.setMode(fallbackMode);
+     const message='RTX Mode did not start. '+(result?.reason||'The local CUDA helper is unavailable')+' Browser physics remains on '+fallbackMode.toUpperCase()+'.';
+     if(note)note.textContent=message;
+     if(sub)sub.textContent=message;
+     return;
+    }
+    const activeMode=window.FrameLabCompute?.setMode('rtx');
+    if(activeMode!=='rtx'){
+     const fallbackMode=lastBrowserComputeMode;
+     if(selector)selector.value=fallbackMode;
+     window.FrameLabCompute?.setMode(fallbackMode);
+     const message='RTX Mode could not activate; the previous browser backend remains enabled.';
+     if(note)note.textContent=message;
+     if(sub)sub.textContent=message;
+     return;
+    }
+    if(note)note.textContent='RTX Mode active · '+result.device+' (compute '+result.computeCapability+'). Live body-motion integration is running through the native CUDA helper. Structural analysis, contact resolution, fire/wind damage, and failure decisions remain CPU-side; WebGPU/CPU remain available as alternatives.';
+    if(sub)sub.textContent='Native CUDA RTX · '+result.device+' · '+result.computeCapability+' · local loopback bridge';
+    return;
+   }
+   lastBrowserComputeMode=mode;
+   window.FrameLabCompute?.setMode(mode);
+   if(note)note.textContent=mode==='gpu'?'WebGPU performs body motion integration when available; failures fall back to CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='cpu'?'Live body motion integration is computed in the CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='main'?'Live motion integration stays on the main CPU thread. Use this as a compatibility/debug fallback.':'Auto uses the CPU worker unless real integration benchmarks show WebGPU is at least 15% faster; large batches then use GPU. GPU errors fall back to CPU. Structural analysis, contact resolution, and failure rules remain CPU-side.';
+   if(sub)sub.textContent=note?.textContent||'CPU/GPU body integration with CPU structural solver';
   }
-  lastBrowserComputeMode=mode;
-  window.FrameLabCompute?.setMode(mode);
-  const note=$('computeModeStatus');
-  if(note)note.textContent=mode==='gpu'?'WebGPU performs body motion integration when available; failures fall back to CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='cpu'?'Live body motion integration is computed in the CPU worker. Structural analysis, contact resolution, and failure rules remain CPU-side.':mode==='main'?'Live motion integration stays on the main CPU thread. Use this as a compatibility/debug fallback.':'Auto uses the CPU worker unless real integration benchmarks show WebGPU is at least 15% faster; large batches then use GPU. GPU errors fall back to CPU. Structural analysis, contact resolution, and failure rules remain CPU-side.';
-  const sub=$('computeSub');if(sub)sub.textContent=note?.textContent||'CPU/GPU body integration with CPU structural solver';
- }
- $('computeMode')?.addEventListener('change',applyPhysicsComputeMode);
- function bindEffectSlider(id,key,outId,minFactor,maxFactor){
+  window.addEventListener('framelabs:rtx-lost',event=>{
+   const selector=$('computeMode');
+   const fallbackMode=lastBrowserComputeMode;
+   if(selector&&selector.value==='rtx')selector.value=fallbackMode;
+   window.FrameLabCompute?.setMode(fallbackMode);
+   const reason=event?.detail?.reason||'the local helper stopped responding';
+   const message='RTX connection lost ('+reason+'). Returned to '+fallbackMode.toUpperCase()+' mode; the simulation continues with a browser backend.';
+   const note=$('computeModeStatus'),sub=$('computeSub');
+   if(note)note.textContent=message;
+   if(sub)sub.textContent=message;
+  });
+  $('computeMode')?.addEventListener('change',()=>{void applyPhysicsComputeMode();});
+  function bindEffectSlider(id,key,outId,minFactor,maxFactor){
  const input=$(id),out=$(outId);if(!input)return;
  const apply=()=>{const percent=Number(input.value),isZero=percent<=0;EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);input.classList.toggle('is-zero-disabled',isZero);input.setAttribute('aria-valuetext',isZero?'Disabled':String(Math.round(percent))+'%');const field=input.closest('.field');field?.classList.toggle('effect-control-disabled',isZero);if(isZero&&(key==='dustDensity'||key==='dustSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='dust');if(isZero&&(key==='smokeDensity'||key==='smokeSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='smoke');if(out){out.textContent=isZero?'Disabled':String(Math.round(percent))+'%';out.setAttribute('aria-live','polite')}draw()};
  input.addEventListener('input',apply);apply();

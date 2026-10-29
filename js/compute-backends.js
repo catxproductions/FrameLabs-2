@@ -24,6 +24,10 @@
   let gpuIntegratePipeline = null;
   let physicsMode = 'auto';
   let physicsBackend = 'CPU worker';
+  const RTX_BRIDGE_URL = 'http://127.0.0.1:47652';
+  let rtxConnected = false;
+  let rtxDeviceInfo = null;
+  let rtxFailureReported = false;
   let gpuInitPromise = null;
   let sequence = 0;
   const pending = new Map();
@@ -36,6 +40,7 @@
     gpuIntegrationCalls: 0, workerIntegrationCalls: 0, wasmIntegrationCalls: 0,
     mainThreadIntegrationCalls: 0, workerConstraintCalls: 0, wasmConstraintCalls: 0,
     wasmDebrisBatches: 0, workerFailures: 0, gpuFallbacks: 0,
+    rtxIntegrationCalls: 0, rtxFallbacks: 0,
     transferredBytes: 0, lastIntegrationBackend: 'not started'
   };
   let runtimeStatusTimer = null;
@@ -684,6 +689,82 @@
     });
   }
 
+  async function connectRTX() {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeout = controller ? window.setTimeout(() => controller.abort(), 3500) : null;
+    try {
+      // This request starts only after the user explicitly selects RTX Mode.
+      // Secure browsers may ask permission before the page can reach loopback.
+      const response = await fetch(RTX_BRIDGE_URL + '/health', {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+        targetAddressSpace: 'loopback',
+        signal: controller?.signal
+      });
+      if (!response.ok) throw new Error('local helper returned HTTP ' + response.status);
+      const info = await response.json();
+      if (info?.ok !== true || !String(info.device || '').toUpperCase().includes('RTX') ||
+          !Array.isArray(info.supports) || !info.supports.includes('body-integration')) {
+        throw new Error('the local helper did not identify a supported RTX GPU/body-integration service');
+      }
+      rtxConnected = true;
+      rtxDeviceInfo = {
+        device: String(info.device),
+        computeCapability: String(info.computeCapability || 'unknown')
+      };
+      rtxFailureReported = false;
+      setStatus('Native CUDA ready · ' + rtxDeviceInfo.device);
+      return { connected: true, ...rtxDeviceInfo };
+    } catch (error) {
+      rtxConnected = false;
+      rtxDeviceInfo = null;
+      const reason = error?.name === 'AbortError'
+        ? 'connection timed out'
+        : (error?.message || 'connection failed');
+      return {
+        connected: false,
+        reason: 'Could not reach the local RTX CUDA helper (' + reason + '). Build and run the native helper with --serve, then allow loopback access for FrameLabs 2.'
+      };
+    } finally {
+      if (timeout !== null) window.clearTimeout(timeout);
+    }
+  }
+
+  async function integrateRTX(packed, dt) {
+    if (!rtxConnected) throw new Error('RTX CUDA bridge is not connected');
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeout = controller ? window.setTimeout(() => controller.abort(), 1500) : null;
+    try {
+      const bytes = new Uint8Array(packed.buffer, packed.byteOffset, packed.byteLength);
+      const response = await fetch(RTX_BRIDGE_URL + '/integrate', {
+        method: 'POST',
+        mode: 'cors',
+        cache: 'no-store',
+        targetAddressSpace: 'loopback',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-FrameLabs-Dt': String(Math.max(0, Math.min(0.05, Number(dt) || 0)))
+        },
+        body: bytes,
+        signal: controller?.signal
+      });
+      if (!response.ok) {
+        const detail = (await response.text()).trim();
+        throw new Error(detail || 'local CUDA helper returned HTTP ' + response.status);
+      }
+      const resultBytes = await response.arrayBuffer();
+      if (resultBytes.byteLength !== packed.byteLength ||
+          resultBytes.byteLength % (BODY_STRIDE * Float32Array.BYTES_PER_ELEMENT) !== 0) {
+        throw new Error('local CUDA helper returned a body buffer with an unexpected size');
+      }
+      packed.set(new Float32Array(resultBytes));
+      return packed;
+    } finally {
+      if (timeout !== null) window.clearTimeout(timeout);
+    }
+  }
+
   async function integrateBodies(packed, dt, options = {}) {
     if (!(packed instanceof Float32Array) || packed.length % BODY_STRIDE !== 0) {
       throw new TypeError(`Physics integration requires a Float32Array with ${BODY_STRIDE} values per body.`);
@@ -693,6 +774,36 @@
     for (let i = 0; i < packed.length; i++) if (!Number.isFinite(packed[i])) packed[i] = 0;
     const transferOwnership = options && options.transferOwnership === true;
     const count = packed.length / BODY_STRIDE;
+    if (physicsMode === 'rtx') {
+      if (rtxConnected) {
+        try {
+          const result = await integrateRTX(packed, dt);
+          computeStats.rtxIntegrationCalls++;
+          computeStats.lastIntegrationBackend = 'Native CUDA RTX body integration';
+          physicsBackend = 'Native CUDA RTX · ' + (rtxDeviceInfo?.device || 'GPU');
+          backend = physicsBackend;
+          setRuntimeStatus(physicsBackend + ' · ' + count + ' bodies');
+          return { data: result, backend: physicsBackend };
+        } catch (error) {
+          rtxConnected = false;
+          rtxDeviceInfo = null;
+          computeStats.rtxFallbacks++;
+          const reason = error?.name === 'AbortError' ? 'CUDA request timed out' : (error?.message || 'bridge connection failed');
+          setRuntimeStatus('RTX bridge lost · CPU fallback · ' + reason);
+          if (!rtxFailureReported) {
+            rtxFailureReported = true;
+            window.dispatchEvent(new CustomEvent('framelabs:rtx-lost', { detail: { reason } }));
+          }
+        }
+      }
+      const fallback = await integrateWorker(packed, dt, transferOwnership);
+      if (!fallback.data) return { data: null, backend: fallback.backend, retryRequired: true };
+      physicsBackend = 'RTX unavailable · ' + fallback.backend;
+      backend = physicsBackend;
+      setRuntimeStatus(physicsBackend + ' · ' + count + ' bodies');
+      return { data: fallback.data, backend: physicsBackend };
+    }
+
     const gpuBatchFits = packed.byteLength <= gpuBodyLimitBytes;
     const useGPU = gpuBatchFits && (physicsMode === 'gpu' ||
       (physicsMode === 'auto' && autoPreferGPU && count >= autoGPUThreshold &&
@@ -831,8 +942,15 @@
   }
 
   function setMode(mode) {
-    physicsMode = ['auto', 'cpu', 'gpu', 'main'].includes(mode) ? mode : 'auto';
-    setStatus(`Physics mode: ${physicsMode === 'auto' ? 'Auto (CPU/GPU)' : physicsMode === 'gpu' ? 'WebGPU with CPU fallback' : physicsMode === 'cpu' ? 'CPU worker' : 'Main-thread CPU'}`);
+    const requested = ['auto', 'cpu', 'gpu', 'main', 'rtx'].includes(mode) ? mode : 'auto';
+    if (requested === 'rtx' && !rtxConnected) {
+      setStatus('RTX CUDA helper not connected · existing backend retained');
+      return physicsMode;
+    }
+    physicsMode = requested;
+    setStatus(physicsMode === 'rtx'
+      ? 'Native CUDA RTX · ' + (rtxDeviceInfo?.device || 'connected GPU')
+      : 'Physics mode: ' + (physicsMode === 'auto' ? 'Auto (CPU/GPU)' : physicsMode === 'gpu' ? 'WebGPU with CPU fallback' : physicsMode === 'cpu' ? 'CPU worker' : 'Main-thread CPU'));
     return physicsMode;
   }
 
@@ -920,6 +1038,8 @@
     getPhysicsBackend: () => physicsBackend,
     getMode: () => physicsMode,
     setMode,
+    connectRTX,
+    getRTXStatus: () => ({ connected: rtxConnected, device: rtxDeviceInfo?.device || null, computeCapability: rtxDeviceInfo?.computeCapability || null }),
     integrateBodies,
     projectConstraints,
     resolveDebrisPairs,

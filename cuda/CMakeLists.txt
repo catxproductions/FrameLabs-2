@@ -8,6 +8,12 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
 endif()
 
 add_executable(framelabs_rtx_mode tensor_core_mode.cu)
+
+find_package(Threads REQUIRED)
+target_link_libraries(framelabs_rtx_mode PRIVATE Threads::Threads)
+if(WIN32)
+  target_link_libraries(framelabs_rtx_mode PRIVATE ws2_32)
+endif()
 target_compile_features(framelabs_rtx_mode PRIVATE cxx_std_17)
 set_target_properties(framelabs_rtx_mode PROPERTIES
   CUDA_STANDARD 17
