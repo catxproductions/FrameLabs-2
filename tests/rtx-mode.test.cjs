@@ -144,7 +144,7 @@ test('RTX bridge loss emits a fallback event and continues through the CPU worke
   const body = new Float32Array([1, 2, 1, -2, 2, 10, 0.5, 1, 2, 0.5, 3, 4, 5]);
   const result = await env.window.FrameLabCompute.integrateBodies(body, 0.05);
 
-  assert.equal(result.backend, 'CPU worker physics');
+  assert.equal(result.backend, 'RTX unavailable · CPU worker physics');
   assert.ok(Math.abs(result.data[0] - 1.055) < 1e-6);
   assert.equal(env.events.length, 1);
   assert.equal(env.events[0].type, 'framelabs:rtx-lost');
