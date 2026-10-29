@@ -683,6 +683,8 @@ function analyzeStructure(){
  for(const d of sim.debris||[]){if(!d.settled||d.y<STORY_HEIGHT*.45||d.y>NY*STORY_HEIGHT+STORY_HEIGHT*.2)continue;const level=clamp(Math.round(d.y/STORY_HEIGHT),1,NY),bay=clamp(Math.floor(d.x/STORY_HEIGHT),0,NX-1);nodeLoads[level][bay]+=d.mass*.5;nodeLoads[level][bay+1]+=d.mass*.5;}
  for(const l of Object.values(BuildingMap.loads)){if(l.failed)continue;l.capacity=0;l.demand=l.mass;l.utilization=l.unsupported?9:0;l.integrity??=1;}
  const beamRedistribution=Object.create(null),columnDemand=Object.create(null);for(const [key,col] of Object.entries(BuildingMap.columns)){col.demand=0;col.unsupported=false;columnDemand[key]=0}
+ // Reset brace load accounting before routing each analysis pass, so repeated validation never accumulates old loads.
+ for(const brace of Object.values(BuildingMap.braces))brace.transferredLoad=0;
  let carried=Array(NX+1).fill(0),unresolved=0;
  for(let level=NY;level>=1;level--){
   const incoming=nodeLoads[level].map((v,x)=>Math.max(0,v+carried[x])),delivered=Array(NX+1).fill(0),nextCarry=Array(NX+1).fill(0);
@@ -690,7 +692,39 @@ function analyzeStructure(){
    const weight=incoming[x];if(weight<.0001)continue;const col=activeColumn(x,level-1);
    if(col){delivered[x]+=weight;continue}
    const recipients=beamPath(x,level);
-   if(!recipients.length){unresolved+=weight;if(weight>.04)warnings.push(`Uncarried load ${weight.toFixed(2)} at node x=${x}, level ${level} has no healthy route to a lower support.`);continue}
+   if(!recipients.length){
+    // If columns and horizontal beams cannot carry this node's gravity load, allow
+    // a healthy diagonal that descends one level to transfer the vertical component.
+    // Carry vertical load onward at the lower node and charge the brace for its axial force.
+    const currentKey=keyOf(x,level),currentNode=sim.nodes[currentKey],braceRoutes=[];
+    if(currentNode){
+     for(const braceLink of sim.memberLinks){
+      const member=braceLink.e;
+      if(braceLink.group!=='braces'||member.failed||member.snapped||member.integrity<=.02||!linkTransfersSupport(braceLink))continue;
+      const otherKey=braceLink.nodeA===currentKey?braceLink.nodeB:braceLink.nodeB===currentKey?braceLink.nodeA:null;
+      if(!otherKey)continue;
+      const lowerNode=sim.nodes[otherKey];
+      if(!lowerNode||currentNode.referenceLevel!==level||lowerNode.referenceLevel!==level-1)continue;
+      const dx=lowerNode.position.x-currentNode.position.x,dy=lowerNode.position.y-currentNode.position.y;
+      const length=Math.max(.001,Math.hypot(dx,dy)),verticalRatio=clamp(Math.abs(dy)/length,.05,1);
+      const jointFactor=clamp(Math.min(braceLink.connectionA.stiffnessFactor??1,braceLink.connectionB.stiffnessFactor??1),.18,1);
+      const axialCapacity=Math.max(.01,member.capacity*clamp(member.integrity,0,1)*jointFactor);
+      braceRoutes.push({link:braceLink,lowerX:lowerNode.gridX,verticalRatio,verticalCapacity:axialCapacity*verticalRatio});
+     }
+    }
+    if(braceRoutes.length){
+     const totalVerticalCapacity=braceRoutes.reduce((sum,route)=>sum+route.verticalCapacity,0)||braceRoutes.length;
+     for(const route of braceRoutes){
+      const share=weight*(route.verticalCapacity/totalVerticalCapacity);
+      nextCarry[route.lowerX]+=share;
+      route.link.e.transferredLoad=(Number(route.link.e.transferredLoad)||0)+share/Math.max(.05,route.verticalRatio);
+     }
+     continue;
+    }
+    unresolved+=weight;
+    if(weight>.04)warnings.push(`Uncarried load ${weight.toFixed(2)} at node x=${x}, level ${level} has no healthy route to a lower support.`);
+    continue;
+   }
    // Beam continuity redistributes load to surviving neighbouring column paths in proportion to remaining capacity.
    const total=recipients.reduce((sum,r)=>sum+Math.max(.01,r.col.capacity*r.col.integrity*Math.max(.18,r.col.connectionFactor||1)),0);
    for(const r of recipients){const share=weight*Math.max(.01,r.col.capacity*r.col.integrity*Math.max(.18,r.col.connectionFactor||1))/total;delivered[r.x]+=share;for(const bx of r.path){const beamKey=keyOf(bx,level);beamRedistribution[beamKey]=(beamRedistribution[beamKey]||0)+share/Math.max(1,r.path.length)*.42}}
@@ -725,16 +759,21 @@ function analyzeStructure(){
   const length=Math.max(.001,Math.hypot(dx,dy));
   const restLength=link?.restLength||STORY_HEIGHT*Math.SQRT2;
   const axialStrain=(length-restLength)/Math.max(.001,restLength);
-  const verticalShare=Math.abs(loadB-loadA)*Math.abs(dx)/length;
+  const transferredLoad=Math.max(0,Number(brace.transferredLoad)||0);
+  const verticalShare=Math.max(Math.abs(loadB-loadA)*Math.abs(dx)/length,transferredLoad);
   const horizontalDemand=(Math.abs(Number(brace.lateralForce)||0)+windLoadForMember('brace',brace))*Math.abs(dy)/length;
-  const deformationDemand=Math.abs(axialStrain)*brace.capacity*2.4;
+  // Ignore sub-percent solver jitter; otherwise tiny position corrections can
+  // randomly switch a brace into its lower compression-capacity state.
+  const compressiveStrain=Math.max(0,-axialStrain-.015);
+  const deformationDemand=Math.max(0,Math.abs(axialStrain)-.015)*brace.capacity*2.4;
   const impactDemand=Math.max(0,Number(brace.impactStress)||0)*brace.capacity*.08;
   brace.windDemand=windLoadForMember('brace',brace);
   brace.axialStrain=axialStrain;
-  // Positive axial force is tension; negative is compression. Compression has
-  // a lower effective capacity to approximate diagonal-member buckling.
-  brace.axialForce=(verticalShare+horizontalDemand+deformationDemand)*Math.sign(axialStrain||1);
-  brace.bucklingFactor=brace.axialForce<0?.62:1;
+  const axialDemand=verticalShare+horizontalDemand+deformationDemand+impactDemand;
+  brace.axialForce=axialDemand*(compressiveStrain>0?-1:1);
+  // Compression buckling only activates after meaningful, sustained-scale
+  // geometric shortening, not from floating-point noise around rest length.
+  brace.bucklingFactor=compressiveStrain>0?.72:1;
   brace.demand=brace.mass*.35+verticalShare+horizontalDemand+deformationDemand+impactDemand;
   const jointA=link?.connectionA, jointB=link?.connectionB;
   const jointFactor=clamp(Math.min(jointA?.stiffnessFactor??1,jointB?.stiffnessFactor??1),.18,1);
