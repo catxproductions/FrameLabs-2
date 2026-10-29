@@ -16,7 +16,6 @@ function makeComputeBackend({ fetchImpl, WorkerImpl } = {}) {
   const timers = new Map();
   let nextTimer = 1;
   const window = {
-    Worker: WorkerImpl,
     setTimeout: (fn, delay) => {
       const id = nextTimer++;
       timers.set(id, { fn, delay });
@@ -33,8 +32,9 @@ function makeComputeBackend({ fetchImpl, WorkerImpl } = {}) {
     currentScript: { src: 'https://catxproductions.github.io/FrameLabs-2/js/compute-backends.js' },
     getElementById: (id) => id === 'computeMetric' ? status : null
   };
+  if (WorkerImpl) window.Worker = WorkerImpl;
   vm.runInNewContext(read('js/compute-backends.js'), {
-    window, document, navigator: {}, URL, Float32Array, Float64Array, ArrayBuffer,
+    window, document, navigator: {}, Worker: WorkerImpl, URL, Float32Array, Float64Array, ArrayBuffer,
     AbortController, CustomEvent: CustomEventMock, fetch: fetchImpl || (async () => { throw new Error('Unexpected fetch'); }),
     queueMicrotask, Math, Number, Map, Promise, Error, RangeError, TypeError, Uint8Array,
     GPUBufferUsage: undefined, GPUMapMode: undefined
@@ -171,7 +171,8 @@ test('RTX Mode has a hardware warning, local-only service, and separate Tensor C
   assert.match(bridge, /Access-Control-Allow-Origin/);
   assert.match(bridge, /"\/health"/);
   assert.match(bridge, /"\/integrate"/);
-  assert.match(bridge, /integrateBodiesKernel<<<\(\(count \+ 255U\) \/ 256U\), 256U>>>/);
+  assert.ok(bridge.includes('integrateBodiesKernel<<<(count + 255U) / 256U, 256U>>>'));
+
   assert.match(cuda, /#include <mma\.h>/);
   assert.match(cuda, /runRTXBridgeServer\(\)/);
   assert.match(cmake, /Threads::Threads/);
