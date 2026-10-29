@@ -706,7 +706,7 @@
       });
       if (!response.ok) throw new Error('error 043: local Vulkan helper returned HTTP ' + response.status);
       const info = await response.json();
-      if (info?.ok !== true || !String(info.device || '').toUpperCase().includes('NVIDIA') ||
+      if (info?.ok !== true || !String(info.device || '').toUpperCase().includes('RTX') ||
           !Array.isArray(info.supports) || !info.supports.includes('body-integration')) {
         throw new Error('error 044: helper did not identify a supported NVIDIA Vulkan compute device');
       }
@@ -1049,12 +1049,17 @@
 
   function setMode(mode) {
     const requested = ['auto', 'cpu', 'gpu', 'main', 'rtx', 'vulkan-rtx'].includes(mode) ? mode : 'auto';
-    if (requested === 'vulkan-rtx' && !vulkanRTXConnected) {\n      setStatus('Vulkan RTX helper not connected · existing backend retained');\n      return physicsMode;\n    }\n    if (requested === 'rtx' && !rtxConnected) {
+    if (requested === 'vulkan-rtx' && !vulkanRTXConnected) {
+      setStatus('Vulkan RTX helper not connected · existing backend retained');
+      return physicsMode;
+    }\n    if (requested === 'rtx' && !rtxConnected) {
       setStatus('RTX CUDA helper not connected · existing backend retained');
       return physicsMode;
     }
     physicsMode = requested;
-    setStatus(physicsMode === 'rtx'
+    setStatus(physicsMode === 'vulkan-rtx'
+      ? 'Native Vulkan RTX · ' + (vulkanRTXDeviceInfo?.device || 'connected GPU')
+      : physicsMode === 'rtx'
       ? 'Native CUDA RTX · ' + (rtxDeviceInfo?.device || 'connected GPU')
       : 'Physics mode: ' + (physicsMode === 'auto' ? 'Auto (CPU/GPU)' : physicsMode === 'gpu' ? 'WebGPU with CPU fallback' : physicsMode === 'cpu' ? 'CPU worker' : 'Main-thread CPU'));
     return physicsMode;
