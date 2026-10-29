@@ -3,13 +3,10 @@
 #include <mma.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <random>
-#include <string>
 #include <vector>
 
 namespace wmma = nvcuda::wmma;
@@ -47,6 +44,37 @@ __global__ void tensorCoreMatmul(const half* a, const half* b, float* c,
 
   wmma::store_matrix_sync(c + tileRow * matrixSize + tileCol, accFrag,
                           matrixSize, wmma::mem_row_major);
+}
+
+
+// Compare a few output cells against a CPU reference. This is a smoke test,
+// not a full numerical proof; it catches indexing and launch mistakes cheaply.
+bool validateSamples(const std::vector<half>& a,
+                     const std::vector<half>& b,
+                     const std::vector<float>& c,
+                     int n) {
+  const std::size_t total = static_cast<std::size_t>(n) * n;
+  const std::vector<std::size_t> samples = {
+      0, total / 4, total / 2, (total * 3) / 4, total - 1};
+
+  for (const std::size_t index : samples) {
+    const int row = static_cast<int>(index / n);
+    const int col = static_cast<int>(index % n);
+    float reference = 0.0f;
+    for (int k = 0; k < n; ++k) {
+      reference += __half2float(a[static_cast<std::size_t>(row) * n + k]) *
+                   __half2float(b[static_cast<std::size_t>(k) * n + col]);
+    }
+
+    const float tolerance = std::max(0.05f, std::abs(reference) * 0.01f);
+    if (!std::isfinite(c[index]) || std::abs(c[index] - reference) > tolerance) {
+      std::cerr << "Validation mismatch at (" << row << ", " << col
+                << "): GPU=" << c[index] << ", CPU=" << reference
+                << ", tolerance=" << tolerance << "\n";
+      return false;
+    }
+  }
+  return true;
 }
 
 int main(int argc, char** argv) {
@@ -100,6 +128,11 @@ int main(int argc, char** argv) {
   const dim3 block(32, 1, 1);
   const dim3 grid(n / 16, n / 16, 1);
   cudaEvent_t start{}, stop{};
+  // Warm up the CUDA context and kernel before recording the measured launch.
+  tensorCoreMatmul<<<grid, block>>>(deviceA, deviceB, deviceC, n);
+  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cudaDeviceSynchronize());
+
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&stop));
   CUDA_CHECK(cudaEventRecord(start));
@@ -111,15 +144,16 @@ int main(int argc, char** argv) {
   CUDA_CHECK(cudaEventElapsedTime(&elapsedMs, start, stop));
   CUDA_CHECK(cudaMemcpy(hostC.data(), deviceC, elements * sizeof(float), cudaMemcpyDeviceToHost));
 
-  // Lightweight sanity check: C must contain finite values.
   const bool finite = std::all_of(hostC.begin(), hostC.end(),
                                   [](float v) { return std::isfinite(v); });
+  const bool samplesPass = finite && validateSamples(hostA, hostB, hostC, n);
   std::cout << "FrameLabs 2 — RTX Mode (experimental prototype)\n"
             << "GPU: " << device.name << " (compute " << device.major << "."
             << device.minor << ")\n"
             << "Matrix: " << n << " x " << n << "\n"
-            << "WMMA kernel time: " << elapsedMs << " ms\n"
-            << "Result sanity check: " << (finite ? "PASS" : "FAIL") << "\n"
+            << "WMMA kernel time (after warm-up): " << elapsedMs << " ms\n"
+            << "Finite output check: " << (finite ? "PASS" : "FAIL") << "\n"
+            << "CPU sample comparison: " << (samplesPass ? "PASS" : "FAIL") << "\n"
             << "Note: this benchmarks Tensor Core matrix math; it is not yet "
                "connected to live FrameLabs structural physics.\n";
 
@@ -128,5 +162,5 @@ int main(int argc, char** argv) {
   CUDA_CHECK(cudaFree(deviceA));
   CUDA_CHECK(cudaFree(deviceB));
   CUDA_CHECK(cudaFree(deviceC));
-  return finite ? 0 : 3;
+  return samplesPass ? 0 : 3;
 }
