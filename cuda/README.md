@@ -1,22 +1,27 @@
 # FrameLabs 2 — RTX Mode (experimental)
 
-RTX Mode is a **separate native mode** for compatible NVIDIA GPUs. It does
-not replace or alter the browser/GitHub Pages build, JavaScript solver, CPU
-worker, or WebGPU fallback. The browser game continues to work without RTX Mode.
+RTX Mode is an **optional native CUDA helper** for a supported NVIDIA RTX
+GPU. The regular GitHub Pages build stays browser-based and does not need the
+helper. When the helper is running and the user explicitly selects RTX Mode,
+the page sends packed moving-body state to a loopback-only service at
+`127.0.0.1:47652`. A CUDA kernel integrates each body's position, velocity,
+angle, and angular velocity, then returns the updated state to the browser.
 
-The prototype uses CUDA WMMA via `#include <mma.h>` to run a dense
-half-precision matrix multiplication with FP32 accumulation on Tensor Cores.
-The program warms up the kernel, measures multiple launches (10 by default),
-reports average GPU kernel time and approximate matrix throughput (not
-end-to-end simulation performance), checks that outputs are finite, and
-compares five output cells with a CPU reference. Use `--help` to see the
-supported command-line arguments. These are useful smoke checks, not a substitute
-for compiling and testing on each target GPU. This is a foundation and
-hardware/build check for a future native physics backend, not a claim that
-Tensor Cores currently accelerate live building
-collapse, collision detection, or the existing web game. Those workloads are
-not automatically dense matrix operations, so connecting RTX Mode to physics
-requires a carefully chosen algorithm and numerical validation.
+This is a real live physics backend, but its scope is deliberately limited:
+structural analysis, load-path propagation, member failure, wind/fire damage,
+contact/collision decisions, and fragmentation still run in the existing
+JavaScript/CPU solver. The live per-body integration kernel uses ordinary
+CUDA parallel arithmetic. It does not use Tensor Cores because independent
+per-body integration is not a dense matrix-multiplication workload, and
+forcing WMMA into it would not reliably improve performance.
+
+The separate prototype benchmark uses CUDA WMMA via `#include <mma.h>` to
+run dense half-precision matrix multiplication with FP32 accumulation on
+Tensor Cores. It warms up the kernel, measures repeated launches, reports
+approximate matrix throughput (not end-to-end simulation performance), checks
+for finite output, and compares sampled output cells against a CPU reference.
+This benchmark demonstrates Tensor Core availability and provides a GPU test;
+it is not counted as live-physics acceleration.
 
 ## Requirements
 
@@ -44,16 +49,41 @@ optional measured launch count is 1–1000, default 10):
 
 On Windows, the executable may be under `build/cuda/Release/`.
 
+## Run the live RTX helper
+
+Start the local bridge in a separate terminal and leave it running while playing:
+
+```sh
+./build/cuda/framelabs_rtx_mode --serve
+```
+
+On Windows, run `build\\cuda\\Release\\framelabs_rtx_mode.exe --serve`.
+The helper verifies that the selected CUDA device name identifies an RTX GPU,
+then binds only to `127.0.0.1:47652` (not to your LAN). Keep the terminal open
+while using RTX Mode. In FrameLabs 2, choose **Physics compute → RTX Mode** and
+confirm the hardware warning. Some browsers ask for loopback/local-network
+permission for the HTTPS game to access the local helper. Grant it only when
+you started the FrameLabs helper yourself.
+
+The helper allows the FrameLabs 2 GitHub Pages origin and localhost development
+origins, rejects other web origins, and exposes only `GET /health` and
+`POST /integrate`. If the connection fails or the helper exits, FrameLabs
+returns to the previously selected browser backend. If the helper is not
+running, RTX Mode will not activate. This local bridge is experimental: network
+round-trip and memory-copy costs may outweigh GPU gains for small body batches,
+so measure actual frame times before concluding it is faster.
+
 For another NVIDIA GPU, change `CMAKE_CUDA_ARCHITECTURES` to a supported target.
-RTX Mode needs a native CUDA environment; it cannot be compiled into the normal
-GitHub Pages JavaScript/WebAssembly build by adding the header to the existing
+The WMMA benchmark requires Tensor Core support; live RTX Mode requires a
+supported RTX GPU and a native CUDA environment. Neither can be compiled into
+the normal GitHub Pages JavaScript/WebAssembly build by adding `<mma.h>` to
 `cpp/physics_core.cpp`.
 
-## Next integration step
+## Remaining scope
 
-Use a native host executable or service boundary to pass an explicitly selected,
-validated workload to CUDA, and retain the existing CPU/WebGPU backends as
-fallbacks. Benchmark end-to-end transfer and dispatch overhead before routing
-small workloads to the GPU. Do not move irregular contact/failure logic to
-Tensor Cores merely to use the hardware; use CUDA C++ kernels for suitable
-parallel physics work and WMMA only where matrix math is actually appropriate.
+Only body-motion integration currently runs through the native CUDA bridge.
+The main structural and collision solver remains in JavaScript/CPU code. Do not
+move irregular contact/failure logic to Tensor Cores merely to use the hardware;
+use CUDA kernels for suitable parallel work and WMMA only where matrix math is
+actually appropriate. End-to-end browser/hardware profiling and an actual RTX
+GPU build/test are still required before treating this mode as release-validated.
