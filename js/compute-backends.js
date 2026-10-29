@@ -25,6 +25,10 @@
   let physicsMode = 'auto';
   let physicsBackend = 'CPU worker';
   const RTX_BRIDGE_URL = 'http://127.0.0.1:47652';
+  const VULKAN_RTX_BRIDGE_URL = 'http://127.0.0.1:47653';
+  let vulkanRTXConnected = false;
+  let vulkanRTXDeviceInfo = null;
+  let vulkanRTXFailureReported = false;
   let rtxConnected = false;
   let rtxDeviceInfo = null;
   let rtxFailureReported = false;
@@ -692,6 +696,72 @@
     });
   }
 
+  async function connectVulkanRTX() {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeout = controller ? window.setTimeout(() => controller.abort(), 3500) : null;
+    try {
+      const response = await fetch(VULKAN_RTX_BRIDGE_URL + '/health', {
+        method: 'GET', mode: 'cors', cache: 'no-store',
+        targetAddressSpace: 'loopback', signal: controller?.signal
+      });
+      if (!response.ok) throw new Error('error 043: local Vulkan helper returned HTTP ' + response.status);
+      const info = await response.json();
+      if (info?.ok !== true || !String(info.device || '').toUpperCase().includes('NVIDIA') ||
+          !Array.isArray(info.supports) || !info.supports.includes('body-integration')) {
+        throw new Error('error 044: helper did not identify a supported NVIDIA Vulkan compute device');
+      }
+      vulkanRTXConnected = true;
+      vulkanRTXDeviceInfo = {
+        device: String(info.device),
+        apiVersion: String(info.apiVersion || 'unknown'),
+        cooperativeMatrix: info.cooperativeMatrix === true,
+        tensorCoreStatus: String(info.tensorCoreStatus || 'not reported')
+      };
+      vulkanRTXFailureReported = false;
+      setStatus('Native Vulkan ready · ' + vulkanRTXDeviceInfo.device);
+      return { connected: true, ...vulkanRTXDeviceInfo };
+    } catch (error) {
+      vulkanRTXConnected = false;
+      vulkanRTXDeviceInfo = null;
+      const reason = error?.name === 'AbortError' ? 'error 045: connection timed out' :
+        (error?.message || 'error 046: connection failed');
+      return { connected: false,
+        reason: 'error 047: Could not reach the local Vulkan RTX helper (' + reason +
+          '). Build and run the Vulkan helper, then allow loopback access for FrameLabs 2.' };
+    } finally {
+      if (timeout !== null) window.clearTimeout(timeout);
+    }
+  }
+
+  async function integrateVulkanRTX(packed, dt) {
+    if (!vulkanRTXConnected) throw new Error('error 048: Vulkan RTX bridge is not connected');
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeout = controller ? window.setTimeout(() => controller.abort(), 750) : null;
+    try {
+      const bytes = new Uint8Array(packed.buffer, packed.byteOffset, packed.byteLength);
+      const response = await fetch(VULKAN_RTX_BRIDGE_URL + '/integrate', {
+        method: 'POST', mode: 'cors', cache: 'no-store',
+        targetAddressSpace: 'loopback',
+        headers: { 'Content-Type': 'application/octet-stream',
+          'X-FrameLabs-Dt': String(Math.max(0, Math.min(0.05, Number(dt) || 0))) },
+        body: bytes, signal: controller?.signal
+      });
+      if (!response.ok) {
+        const detail = (await response.text()).trim();
+        throw new Error(detail || 'error 049: Vulkan helper returned HTTP ' + response.status);
+      }
+      const resultBytes = await response.arrayBuffer();
+      if (resultBytes.byteLength !== packed.byteLength ||
+          resultBytes.byteLength % (BODY_STRIDE * Float32Array.BYTES_PER_ELEMENT) !== 0) {
+        throw new Error('error 050: Vulkan helper returned a body buffer with an unexpected size');
+      }
+      packed.set(new Float32Array(resultBytes));
+      return packed;
+    } finally {
+      if (timeout !== null) window.clearTimeout(timeout);
+    }
+  }
+
   async function connectRTX() {
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timeout = controller ? window.setTimeout(() => controller.abort(), 3500) : null;
@@ -779,6 +849,37 @@
     for (let i = 0; i < packed.length; i++) if (!Number.isFinite(packed[i])) packed[i] = 0;
     const transferOwnership = options && options.transferOwnership === true;
     const count = packed.length / BODY_STRIDE;
+    if (physicsMode === 'vulkan-rtx') {
+      if (vulkanRTXConnected) {
+        try {
+          const result = await integrateVulkanRTX(packed, dt);
+          computeStats.rtxIntegrationCalls++;
+          computeStats.lastIntegrationBackend = 'Native Vulkan RTX body integration';
+          physicsBackend = 'Vulkan RTX · ' + (vulkanRTXDeviceInfo?.device || 'NVIDIA GPU');
+          backend = physicsBackend;
+          setRuntimeStatus(physicsBackend + ' · ' + count + ' bodies');
+          return { data: result, backend: physicsBackend };
+        } catch (error) {
+          vulkanRTXConnected = false;
+          vulkanRTXDeviceInfo = null;
+          computeStats.rtxFallbacks++;
+          const reason = error?.name === 'AbortError' ? 'error 051: Vulkan request timed out' :
+            (error?.message || 'error 052: Vulkan bridge connection failed');
+          setRuntimeStatus('error 053: Vulkan RTX bridge lost · CPU fallback · ' + reason);
+          if (!vulkanRTXFailureReported) {
+            vulkanRTXFailureReported = true;
+            window.dispatchEvent(new CustomEvent('framelabs:vulkan-rtx-lost', { detail: { reason } }));
+          }
+        }
+      }
+      const fallback = await integrateWorker(packed, dt, transferOwnership);
+      if (!fallback.data) return { data: null, backend: fallback.backend, retryRequired: true };
+      physicsBackend = 'Vulkan RTX unavailable · ' + fallback.backend;
+      backend = physicsBackend;
+      setRuntimeStatus(physicsBackend + ' · ' + count + ' bodies');
+      return { data: fallback.data, backend: physicsBackend };
+    }
+
     if (physicsMode === 'rtx') {
       if (rtxConnected) {
         try {
@@ -947,8 +1048,8 @@
   }
 
   function setMode(mode) {
-    const requested = ['auto', 'cpu', 'gpu', 'main', 'rtx'].includes(mode) ? mode : 'auto';
-    if (requested === 'rtx' && !rtxConnected) {
+    const requested = ['auto', 'cpu', 'gpu', 'main', 'rtx', 'vulkan-rtx'].includes(mode) ? mode : 'auto';
+    if (requested === 'vulkan-rtx' && !vulkanRTXConnected) {\n      setStatus('Vulkan RTX helper not connected · existing backend retained');\n      return physicsMode;\n    }\n    if (requested === 'rtx' && !rtxConnected) {
       setStatus('RTX CUDA helper not connected · existing backend retained');
       return physicsMode;
     }
