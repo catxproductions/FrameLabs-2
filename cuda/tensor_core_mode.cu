@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "rtx_bridge.cuh"
+
 namespace wmma = nvcuda::wmma;
 
 #define CUDA_CHECK(call) do { \
@@ -81,6 +83,13 @@ bool validateSamples(const std::vector<half>& a,
 int main(int argc, char** argv) {
   int n = 1024;
   int iterations = 10;
+  if (argc > 1 && std::string(argv[1]) == "--serve") {
+    if (argc != 2) {
+      std::cerr << "Use --serve without additional arguments.\n";
+      return 2;
+    }
+    return framelabs_rtx_bridge::runRTXBridgeServer();
+  }
   if (argc > 1 && (std::string(argv[1]) == "--help" ||
                    std::string(argv[1]) == "-h")) {
     std::cout << "Usage: framelabs_rtx_mode [matrix-size-multiple-of-16] [iterations]\n"
