@@ -55,6 +55,8 @@ int main() {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
         VkPhysicalDeviceShaderFloat16Int8Features float16Feature{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES};
+    VkPhysicalDevice16BitStorageFeatures storage16Feature{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
         std::vector<VkCooperativeMatrixPropertiesKHR> supported;
         uint32_t queueFamily = 0;
         std::string gpuName;
@@ -62,7 +64,8 @@ int main() {
         for (auto candidate : physicals) {
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(candidate, &properties);
-            if (properties.vendorID != 0x10DE ||
+            if (properties.apiVersion < VK_API_VERSION_1_2 ||
+                properties.vendorID != 0x10DE ||
                 std::string(properties.deviceName).find("RTX") == std::string::npos) continue;
             if (!hasExtension(candidate, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME)) continue;
 
@@ -70,11 +73,14 @@ int main() {
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
             VkPhysicalDeviceShaderFloat16Int8Features ff{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES};
+            VkPhysicalDevice16BitStorageFeatures sf{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
             cf.pNext = &ff;
+            ff.pNext = &sf;
             VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
             f2.pNext = &cf;
             vkGetPhysicalDeviceFeatures2(candidate, &f2);
-            if (!cf.cooperativeMatrix || !ff.shaderFloat16) continue;
+            if (!cf.cooperativeMatrix || !ff.shaderFloat16 || !sf.storageBuffer16BitAccess) continue;
 
             auto getProps = reinterpret_cast<PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR>(
                 vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR"));
@@ -105,6 +111,7 @@ int main() {
                     gpuName = properties.deviceName;
                     coopFeature = cf;
                     float16Feature = ff;
+                    storage16Feature = sf;
                     supported = std::move(props);
                     break;
                 }
@@ -113,7 +120,7 @@ int main() {
         }
         if (!physical) throw std::runtime_error(
             "No NVIDIA RTX device exposes VK_KHR_cooperative_matrix with the required "
-            "16x16x16 subgroup FP16xFP16-to-FP32 shape and shaderFloat16 feature.");
+            "Vulkan 1.2, 16x16x16 subgroup FP16xFP16-to-FP32 shape, shaderFloat16, and storageBuffer16BitAccess features.");
 
         float priority = 1.0f;
         VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -122,8 +129,10 @@ int main() {
         qci.pQueuePriorities = &priority;
         const char* extensions[] = {VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME};
         coopFeature.pNext = &float16Feature;
+        float16Feature.pNext = &storage16Feature;
         coopFeature.cooperativeMatrix = VK_TRUE;
         float16Feature.shaderFloat16 = VK_TRUE;
+        storage16Feature.storageBuffer16BitAccess = VK_TRUE;
         VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         dci.pNext = &coopFeature;
         dci.queueCreateInfoCount = 1;
