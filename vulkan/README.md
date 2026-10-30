@@ -11,4 +11,19 @@ On Windows run build/vulkan/Release/framelabs_vulkan_rtx_mode.exe. Keep it runni
 
 The helper binds only to 127.0.0.1:47653 and accepts the FrameLabs GitHub Pages origin and localhost development origins. It exposes GET /health and POST /integrate. Structural analysis, collision resolution, environmental damage, and failure decisions remain in JavaScript on the CPU.
 
-Tensor Core status: the helper reports whether the Vulkan driver exposes a cooperative-matrix extension. This is only a capability signal. The current body integration shader uses ordinary floating-point compute and does NOT dispatch Tensor Core operations. A separate cooperative-matrix kernel and suitable matrix-heavy physics workload are required before claiming Tensor Core acceleration.
+## Genuine cooperative-matrix validation
+
+The build also creates a separate executable:
+
+    build/vulkan/Release/framelabs_coopmat_probe.exe
+
+Run it on an NVIDIA RTX machine with a Vulkan driver that supports VK_KHR_cooperative_matrix and the exact matrix shape used by the test. The probe queries the device's cooperative-matrix properties and enabled features, then dispatches a real coopMatMulAdd operation from a Vulkan compute shader:
+
+- A: 16x16 FP16
+- B: 16x16 FP16
+- accumulator/output: 16x16 FP32
+- scope: subgroup
+
+The test initializes A to 1.0 and B to 2.0, so every output element must equal 32.0. It prints PASS only after reading back and validating all 256 results. If the driver does not expose the required extension, feature, or shape, it exits with an explanatory error instead of pretending the operation ran.
+
+This probe is a genuine cooperative-matrix dispatch, but it is currently a hardware validation/benchmark foundation, not yet part of live FrameLabs structural physics. The existing /integrate body-motion shader remains ordinary Vulkan compute. Do not describe live gameplay as Tensor Core accelerated until a useful structural-solver workload is integrated and measured.
