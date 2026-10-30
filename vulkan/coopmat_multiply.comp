@@ -1,0 +1,29 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// One 32-lane subgroup cooperatively evaluates a real 16x16x16 matrix product.
+// A and B use FP16 inputs; the accumulator and output are FP32.
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer MatrixA {
+    float16_t values[];
+} aBuffer;
+layout(set = 0, binding = 1, std430) readonly buffer MatrixB {
+    float16_t values[];
+} bBuffer;
+layout(set = 0, binding = 2, std430) writeonly buffer MatrixC {
+    float values[];
+} cBuffer;
+
+void main() {
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> A;
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> B;
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> C =
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    coopMatLoad(A, aBuffer.values, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(B, bBuffer.values, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+    C = coopMatMulAdd(A, B, C);
+    coopMatStore(C, cBuffer.values, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+}
