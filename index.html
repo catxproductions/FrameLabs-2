@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#171423">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./assets/icons/framelabs-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="FrameLabs 2">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="description" content="Build custom structural frames of adjustable size and explore load paths, member failure, fictional flammable and explosive materials, radial blasts, and progressive collapse in FrameLabs 2.">
 <meta name="color-scheme" content="dark">
 <meta name="application-name" content="FrameLabs 2">
@@ -252,6 +257,15 @@
 <script src="./js/physics-model.js"></script>
 <script src="./js/replay-tools.js"></script>
 <script src="./js/main.js"></script>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch((error) => {
+      console.warn("FrameLabs 2: service worker registration failed.", error);
+    });
+  });
+}
+</script>
 </body>
 </html>
 

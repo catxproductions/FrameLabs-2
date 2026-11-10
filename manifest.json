@@ -1,0 +1,27 @@
+{
+  "id": "./",
+  "name": "FrameLabs 2",
+  "short_name": "FrameLabs",
+  "description": "A structural physics sandbox for building frames and exploring simplified structural behavior.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#171423",
+  "theme_color": "#171423",
+  "categories": ["education", "simulation"],
+  "icons": [
+    {
+      "src": "./assets/icons/framelabs-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/icons/framelabs-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
