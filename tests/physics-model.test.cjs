@@ -284,6 +284,14 @@ test('main physics tags intact floating assemblies and bypasses gravity-only fai
 });
 
 
+test('active fire and pending material reactions prevent premature automatic simulation pause', () => {
+  assert.match(mainSource, /const activeMaterialHazards=sim\.memberLinks\.some\(link=>!link\.e\.failed&&link\.e\.burning/);
+  assert.match(mainSource, /sim\.debris\.some\(d=>d\.burning&&Number\(d\.fuelRemaining\?\?0\)>0\)/);
+  assert.match(mainSource, /sim\.pendingMaterialBlasts\?\.length/);
+  assert.match(mainSource, /!airborneNodes&&!activeMaterialHazards&&!\(sim\.explosionEffects\|\|\[\]\)\.length/);
+  assert.match(mainSource, /!sim\.debris\.length&&!activeMaterialHazards&&!\(sim\.explosionEffects\|\|\[\]\)\.length/);
+});
+
 test('unified falling assembly joints do not yield below actual normalized stress', () => {
   assert.match(mainSource, /const ratio=clamp\(Math\.max\(stress\.utilization,conn\.pendingBreakUntil!=null\?\(Number\(conn\.lastDemandRatio\)\|\|0\):0\),0,4\)/);
   assert.match(mainSource, /if\(ratio<=1&&conn\.pendingBreakUntil==null\)continue/);
