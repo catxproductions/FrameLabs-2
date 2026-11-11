@@ -284,6 +284,16 @@ test('main physics tags intact floating assemblies and bypasses gravity-only fai
 });
 
 
+test('burning member debris retains its endpoints and propagates heat after fracture', () => {
+  assert.match(mainSource, /sourceNodeA:link\.nodeA,sourceNodeB:link\.nodeB/);
+  assert.match(mainSource, /const burningDebrisSources=sim\.debris\.filter/);
+  assert.match(mainSource, /debris\.fireSpreadClock=\(debris\.fireSpreadClock\|\|0\)\+dt/);
+  assert.match(mainSource, /spread from burning debris/);
+  assert.match(mainSource, /spread from nearby burning debris/);
+  assert.match(mainSource, /debrisSpreadMembers\.add\(neighbor\.id\)/);
+  assert.match(mainSource, /debrisSpreadTargets\.add\(target\.id\)/);
+});
+
 test('active fire and pending material reactions prevent premature automatic simulation pause', () => {
   assert.match(mainSource, /const activeMaterialHazards=sim\.memberLinks\.some\(link=>!link\.e\.failed&&link\.e\.burning/);
   assert.match(mainSource, /sim\.debris\.some\(d=>d\.burning&&Number\(d\.fuelRemaining\?\?0\)>0\)/);

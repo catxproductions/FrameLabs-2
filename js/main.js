@@ -651,7 +651,7 @@ function spawnMemberDebris(link,reason='member failure'){
  const halves=[];
  for(let i=0;i<2;i++){
   const sign=i===0?-1:1,t=i===0?.25:.75,centerOffset=(i===0?-.014:.014),halfLength=fullLength*.5;
-  const fragment={id:sim.nextDebrisId++,sourceId:`${link.id}:half${i+1}`,parentSourceId:link.id,kind,material,x:a.position.x+dx*t+ux*centerOffset,y:a.position.y+dy*t+uy*centerOffset,angle:angle+sign*.012,length:halfLength,thickness:kind==='slab'?.16:kind==='column'?.12:kind==='brace'?.075:.1,mass:Math.max(.01,e.mass*.5),capacity:Math.max(.01,e.capacity*.5),impactResistance:e.impactResistance||IMPACT_RESISTANCE[material]?.[kind]||1,durability:Math.max(.25,(e.durability||e.capacity*IMPACT_ENERGY_PER_CAPACITY)*.5),integrity:clamp(e.integrity,0,1),thermalDamage:clamp(Number(e.thermalDamage)||0,0,1),vx:clamp(a.velocity.x+(b.velocity.x-a.velocity.x)*t+sign*ux*fractureKick,-MAX_FALL_SPEED,MAX_FALL_SPEED),vy:clamp(a.velocity.y+(b.velocity.y-a.velocity.y)*t+sign*uy*fractureKick-.025,-MAX_FALL_SPEED,MAX_FALL_SPEED),angularVelocity:clamp(nodeAngular+sign*(/impact|explosion|shatter|fracture/i.test(reason)?.12:.035),-3.4,3.4),momentOfInertia:Math.max(.01,e.mass*.5*halfLength*halfLength/12),tipDirection:sign,age:0,settled:false,grounded:false,reason:`fractured half ${i+1}/2 · ${reason}`,impactCooldown:-Infinity,impactCount:0,fragmentDepth:0,fragmented:false,fractureHalf:i+1,burning:!!e.burning,fuelRemaining:Math.max(0,(Number(e.fuelRemaining)||0)*.5),heatExposure:0,fireSpreadClock:0,explosiveSpent:!!e.detonated};
+  const fragment={id:sim.nextDebrisId++,sourceId:`${link.id}:half${i+1}`,parentSourceId:link.id,sourceNodeA:link.nodeA,sourceNodeB:link.nodeB,kind,material,x:a.position.x+dx*t+ux*centerOffset,y:a.position.y+dy*t+uy*centerOffset,angle:angle+sign*.012,length:halfLength,thickness:kind==='slab'?.16:kind==='column'?.12:kind==='brace'?.075:.1,mass:Math.max(.01,e.mass*.5),capacity:Math.max(.01,e.capacity*.5),impactResistance:e.impactResistance||IMPACT_RESISTANCE[material]?.[kind]||1,durability:Math.max(.25,(e.durability||e.capacity*IMPACT_ENERGY_PER_CAPACITY)*.5),integrity:clamp(e.integrity,0,1),thermalDamage:clamp(Number(e.thermalDamage)||0,0,1),vx:clamp(a.velocity.x+(b.velocity.x-a.velocity.x)*t+sign*ux*fractureKick,-MAX_FALL_SPEED,MAX_FALL_SPEED),vy:clamp(a.velocity.y+(b.velocity.y-a.velocity.y)*t+sign*uy*fractureKick-.025,-MAX_FALL_SPEED,MAX_FALL_SPEED),angularVelocity:clamp(nodeAngular+sign*(/impact|explosion|shatter|fracture/i.test(reason)?.12:.035),-3.4,3.4),momentOfInertia:Math.max(.01,e.mass*.5*halfLength*halfLength/12),tipDirection:sign,age:0,settled:false,grounded:false,reason:`fractured half ${i+1}/2 · ${reason}`,impactCooldown:-Infinity,impactCount:0,fragmentDepth:0,fragmented:false,fractureHalf:i+1,burning:!!e.burning,fuelRemaining:Math.max(0,(Number(e.fuelRemaining)||0)*.5),heatExposure:0,fireSpreadClock:0,explosiveSpent:!!e.detonated};
   updateDebrisBounds(fragment);halves.push(fragment);
  }
  // Keep half the original member mass in each fragment; the two pieces separate at the fracture plane.
@@ -1295,27 +1295,17 @@ function updateMaterialHazards(dt) {
   }
  }
 
- // Queue first, then apply changes. This avoids modifying the list while walking it.
- for (const [link, reason] of burnQueue) {
-  if (link.e.failed) continue;
-
-  if (reason === 'burned through') {
-   failMember(link, 'FLAMMABLE MEMBER BURNED THROUGH');
-  } else {
-   igniteMember(link, reason);
-  }
- }
-
- for (const [link, power, reason] of detonateQueue) {
-  if (!link.e.detonated && !link.e.failed) {
-   triggerExplosiveMember(link, power, 0, reason);
-  }
- }
-
  // Fire can also reach detached combustible debris. Spent explosive debris cannot re-trigger.
  const burningSources = activeLinks
   .filter(link => isFlammableMaterial(link.e.material) && link.e.burning)
   .slice(0, 96);
+ const burningDebrisSources = sim.debris.filter(debris =>
+  isFlammableMaterial(debris.material) && debris.burning
+ );
+ // Avoid applying the same nearby member/debris heat dose twice in one physics step
+ // when both halves of a failed member are burning.
+ const debrisSpreadMembers = new Set();
+ const debrisSpreadTargets = new Set();
 
  for (const debris of sim.debris) {
   if (isFlammableMaterial(debris.material) && debris.burning) {
@@ -1344,6 +1334,63 @@ function updateMaterialHazards(dt) {
     debris.burning = false;
     debris.reason = 'burned-out flammable debris';
    }
+
+   // Burning fragments remain real fire sources after their parent member fails.
+   // Every spread interval they can heat intact members at the original member
+   // endpoints and ignite nearby combustible rubble.
+   if (debris.burning) {
+    debris.fireSpreadClock = (debris.fireSpreadClock || 0) + dt;
+    if (debris.fireSpreadClock >= 0.55) {
+     debris.fireSpreadClock -= 0.55;
+
+     for (const nodeKey of [debris.sourceNodeA, debris.sourceNodeB]) {
+      if (!nodeKey) continue;
+      for (const neighbor of linksByNode[nodeKey] || []) {
+       if (neighbor.e.failed || debrisSpreadMembers.has(neighbor.id)) continue;
+       const joint = neighbor.nodeA === nodeKey
+        ? neighbor.connectionA
+        : neighbor.connectionB;
+       if (joint?.broken) continue;
+
+       debrisSpreadMembers.add(neighbor.id);
+       const nextElement = neighbor.e;
+       if (!nextElement.burning) applyHeatWeakening(neighbor, 1);
+       if (nextElement.failed) continue;
+
+       if (isFlammableMaterial(nextElement.material) && !nextElement.burning) {
+        nextElement.heatExposure = (nextElement.heatExposure || 0) + 0.62;
+        if (nextElement.heatExposure >= 1.0) {
+         burnQueue.push([neighbor, 'spread from burning debris']);
+        }
+       }
+
+       if (isExplosiveMaterial(nextElement.material) && !nextElement.detonated) {
+        nextElement.heatExposure = (nextElement.heatExposure || 0) + 0.72;
+        nextElement.explosivePrimed = true;
+        if (nextElement.heatExposure >= 0.72) {
+         detonateQueue.push([neighbor, 5.2, 'heated by burning debris']);
+        }
+       }
+      }
+     }
+
+     for (const target of sim.debris) {
+      if (target === debris || target.burning ||
+          !isFlammableMaterial(target.material) || debrisSpreadTargets.has(target.id)) continue;
+      if (Math.hypot(target.x - debris.x, target.y - debris.y) >= STORY_HEIGHT * 0.34) continue;
+
+      debrisSpreadTargets.add(target.id);
+      target.heatExposure = (target.heatExposure || 0) + 0.62;
+      if (target.heatExposure >= 1.0) {
+       target.burning = true;
+       target.fuelRemaining = clamp(Number(target.fuelRemaining ?? 0.5), 0.05, 1);
+       target.fireSpreadClock = 0;
+       target.ignitionReason = 'spread from nearby burning debris';
+       target.reason = 'ignited by nearby burning debris';
+      }
+     }
+    }
+   }
   }
 
   if (!isExplosiveMaterial(debris.material) || debris.explosiveSpent) continue;
@@ -1359,6 +1406,15 @@ function updateMaterialHazards(dt) {
    ) {
     heatedByFire = true;
     break;
+   }
+  }
+  if (!heatedByFire) {
+   for (const source of burningDebrisSources) {
+    if (source === debris) continue;
+    if (Math.hypot(debris.x - source.x, debris.y - source.y) < STORY_HEIGHT * 0.34) {
+     heatedByFire = true;
+     break;
+    }
    }
   }
 
@@ -1377,6 +1433,23 @@ function updateMaterialHazards(dt) {
      'heated explosive debris'
     );
    }
+  }
+ }
+
+ // Apply queued ignition/failure events only after iterating all current debris.
+ // failMember can append new fragments, so applying the queue afterward avoids
+ // walking an array while it is being extended by the same fire-spread pass.
+ for (const [link, reason] of burnQueue) {
+  if (link.e.failed) continue;
+  if (reason === 'burned through') {
+   failMember(link, 'FLAMMABLE MEMBER BURNED THROUGH');
+  } else {
+   igniteMember(link, reason);
+  }
+ }
+ for (const [link, power, reason] of detonateQueue) {
+  if (!link.e.detonated && !link.e.failed) {
+   triggerExplosiveMember(link, power, 0, reason);
   }
  }
 }
