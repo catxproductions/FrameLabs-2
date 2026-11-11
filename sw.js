@@ -1,7 +1,7 @@
 /* FrameLabs 2 PWA service worker */
 "use strict";
 
-const CACHE_NAME = "framelabs-2-shell-v1";
+const CACHE_NAME = "framelabs-2-shell-v2";
 const APP_ROOT = new URL("./", self.registration.scope);
 const APP_SHELL = [
   APP_ROOT.href,
@@ -12,6 +12,7 @@ const APP_SHELL = [
   new URL("js/materials.js", APP_ROOT).href,
   new URL("js/physics-model.js", APP_ROOT).href,
   new URL("js/replay-tools.js", APP_ROOT).href,
+  new URL("js/fire-effects.js", APP_ROOT).href,
   new URL("js/main.js", APP_ROOT).href,
   new URL("assets/icons/framelabs-192.png", APP_ROOT).href,
   new URL("assets/icons/framelabs-512.png", APP_ROOT).href

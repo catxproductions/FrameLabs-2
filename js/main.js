@@ -12,6 +12,11 @@ const ENVIRONMENT={moisture:0,waterLevel:0,windSpeed:0,windDirection:1};
 // These settings tune appearance only. Heat, fuel consumption, ignition, and
 // material damage remain governed by the simulation model.
 const EFFECT_SETTINGS={fireRealism:.80,fireDensity:1,fireSize:1,dustRealism:.72,dustDensity:1,dustSize:1,smokeRealism:.78,smokeDensity:1,smokeSize:1};
+const FIRE_EFFECTS=window.FrameLabFireEffects;
+const MAX_FIRE_MEMBER_VISUALS_PER_FRAME=160;
+const MAX_FIRE_FLAME_SHAPES_PER_FRAME=360;
+const MAX_FIRE_DEBRIS_VISUALS_PER_FRAME=96;
+let atmosphericParticleEvictionCursor=0;
 // Reuse packing storage across the fixed 120 Hz loop to reduce short-lived typed-array
 // allocations and garbage-collection pauses during large collapses. Buffers may be
 // transferred to/from the worker; acquireScratchArray always recovers from detachment.
@@ -487,11 +492,12 @@ function addAtmosphericParticle(particle){
  const visualDensity=Math.max(Number(EFFECT_SETTINGS.dustDensity)||0,Number(EFFECT_SETTINGS.smokeDensity)||0);
  const densityExpansion=clamp(visualDensity/2,1,5);
  const limit=Math.min(3000,Math.floor(qualityBudget*densityExpansion));
+ // Particle eviction must stay O(1): scanning the entire particle array for the
+ // "oldest" item on every smoke puff made large spreading fires stall the main thread.
  while(particles.length>=limit){
-  // Prefer retaining fresh, impact-driven dust while trimming the oldest visual-only particles.
-  let removeAt=0,oldest=-Infinity;
-  for(let i=0;i<particles.length;i++){const ageScore=particles[i].age/(particles[i].life||1)+(particles[i].kind==='dust'?.18:0);if(ageScore>oldest){oldest=ageScore;removeAt=i}}
-  particles.splice(removeAt,1);
+  atmosphericParticleEvictionCursor=FIRE_EFFECTS.evictAtCursor(
+   particles, atmosphericParticleEvictionCursor
+  );
  }
  particles.push(particle);
 }
@@ -1385,21 +1391,36 @@ function detonateAt(px,py){
 function drawMaterialEffects(){
  // A subtle orange glow marks heat-weakened, not-yet-burning members.
  for(const link of sim.memberLinks){const e=link.e;if(!e||e.failed||e.burning||(e.thermalDamage||0)<.035)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const x1=GRID_LEFT+a.position.x/STORY_HEIGHT*DX,y1=GROUND_Y-a.position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+b.position.x/STORY_HEIGHT*DX,y2=GROUND_Y-b.position.y/STORY_HEIGHT*STORY_PX;ctx.save();ctx.globalAlpha=clamp(e.thermalDamage*.82,.06,.55);ctx.strokeStyle='#ff9857';ctx.lineWidth=1.8+e.thermalDamage*3.2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore()}
- // Flames are visual-only: fuel consumption and fire spread stay in the physics model.
+
+ // Fire behavior is simulated for every member, but flame artwork is sampled
+ // and capped so a structure-wide fire cannot create thousands of gradients per frame.
  const fireRealism=clamp(Number(EFFECT_SETTINGS.fireRealism)||0,0,1);
  const fireDensity=clamp(Number(EFFECT_SETTINGS.fireDensity)||0,0,10);
  const rawFireSize=Number(EFFECT_SETTINGS.fireSize),fireSize=clamp(Number.isFinite(rawFireSize)?rawFireSize:1,0,10);
  if(fireDensity>0&&fireSize>0){
+  const burningMembers=[];
   for(const link of sim.memberLinks){
    const e=link.e;if(!e.burning||e.failed)continue;
    const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;
+   burningMembers.push({e,a,b});
+  }
+  const memberSamples=FIRE_EFFECTS.sampleIndices(
+   burningMembers.length,
+   MAX_FIRE_MEMBER_VISUALS_PER_FRAME,
+   Math.floor(ENVIRONMENT.windTime*7)
+  );
+  let remainingFlames=MAX_FIRE_FLAME_SHAPES_PER_FRAME;
+  for(const sampleIndex of memberSamples){
+   if(remainingFlames<=0)break;
+   const {e,a,b}=burningMembers[sampleIndex];
    const x1=GRID_LEFT+a.position.x/STORY_HEIGHT*DX,y1=GROUND_Y-a.position.y/STORY_HEIGHT*STORY_PX,x2=GRID_LEFT+b.position.x/STORY_HEIGHT*DX,y2=GROUND_Y-b.position.y/STORY_HEIGHT*STORY_PX;
    const length=Math.hypot(x2-x1,y2-y1);
    ctx.save();ctx.lineCap='round';ctx.shadowColor='rgba(255,94,33,.62)';ctx.shadowBlur=4+fireRealism*9;
    ctx.strokeStyle='rgba(255,92,35,.28)';ctx.lineWidth=(5+fireRealism*5)*fireSize;
    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.shadowBlur=0;
    ctx.strokeStyle='rgba(255,128,48,.42)';ctx.lineWidth=Math.max(2,2.4*fireSize);ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-   const baseCount=clamp(Math.floor(length/25),1,8),count=Math.max(1,Math.min(80,Math.round(baseCount*fireDensity)));
+   const baseCount=clamp(Math.floor(length/25),1,8);
+   const count=Math.min(remainingFlames,Math.max(1,Math.min(4,Math.round(baseCount*fireDensity))));
    for(let i=0;i<count;i++){
     const t=(i+.5)/count,x=x1+(x2-x1)*t,y=y1+(y2-y1)*t;
     const phase=ENVIRONMENT.windTime*(8+fireRealism*5)+i*2.1+e.x*.7;
@@ -1426,10 +1447,18 @@ function drawMaterialEffects(){
      ctx.beginPath();ctx.ellipse(x+lean*.12,y-innerH*.34,Math.max(.45,w*.12),Math.max(.7,innerH*.19),lean*.025,0,Math.PI*2);ctx.fill();
     }
    }
+   remainingFlames-=count;
    ctx.restore();
   }
-  for(const d of sim.debris){
-   if(!d.burning)continue;
+
+  const burningDebris=sim.debris.filter(d=>d.burning);
+  const debrisSamples=FIRE_EFFECTS.sampleIndices(
+   burningDebris.length,
+   MAX_FIRE_DEBRIS_VISUALS_PER_FRAME,
+   Math.floor(ENVIRONMENT.windTime*5)
+  );
+  for(const sampleIndex of debrisSamples){
+   const d=burningDebris[sampleIndex];
    const x=GRID_LEFT+d.x/STORY_HEIGHT*DX,y=GROUND_Y-d.y/STORY_HEIGHT*STORY_PX,pulse=.6+.4*Math.abs(Math.sin(ENVIRONMENT.windTime*8+d.id));
    ctx.save();ctx.globalAlpha=clamp(.45+.16*fireDensity,0,.82);ctx.shadowColor='rgba(255,103,37,.65)';ctx.shadowBlur=4+fireRealism*6;
    ctx.fillStyle='#ff8542';ctx.beginPath();ctx.ellipse(x,y-4,fireSize*(3+pulse*2),fireSize*(5+pulse*4),Math.sin(ENVIRONMENT.windTime*4+d.id)*.12,0,Math.PI*2);ctx.fill();
@@ -1437,9 +1466,11 @@ function drawMaterialEffects(){
    ctx.beginPath();ctx.ellipse(x+Math.sin(ENVIRONMENT.windTime*7+d.id)*.7,y-4,fireSize*1.1,fireSize*(2+pulse),0,0,Math.PI*2);ctx.fill();ctx.restore();
   }
  }
+
  // Primed explosive elements blink before a heat-triggered chain reaction.
  for(const link of sim.memberLinks){const e=link.e;if(!e.explosivePrimed||e.failed)continue;const a=sim.nodes[link.nodeA],b=sim.nodes[link.nodeB];if(!a||!b)continue;const x=GRID_LEFT+(a.position.x+b.position.x)*.5/STORY_HEIGHT*DX,y=GROUND_Y-(a.position.y+b.position.y)*.5/STORY_HEIGHT*STORY_PX;ctx.save();ctx.globalAlpha=.5+.5*Math.sin(sim.time*18);ctx.strokeStyle='#ff68ac';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,5+Math.sin(sim.time*12)*2,0,Math.PI*2);ctx.stroke();ctx.restore()}
 }
+
 function drawExplosionEffects(){
  for(const fx of sim.explosionEffects||[]){const t=clamp(fx.age/fx.duration,0,1),fade=1-t,cx=GRID_LEFT+fx.x/STORY_HEIGHT*DX,cy=GROUND_Y-fx.y/STORY_HEIGHT*STORY_PX,rx=fx.radius/STORY_HEIGHT*DX,ry=fx.radius/STORY_HEIGHT*STORY_PX;
   ctx.save();ctx.globalAlpha=Math.max(0,fade*.38);const glow=ctx.createRadialGradient(cx,cy,1,cx,cy,Math.max(rx,ry)*.45);glow.addColorStop(0,'rgba(255,245,202,.86)');glow.addColorStop(.35,'rgba(255,156,83,.52)');glow.addColorStop(1,'rgba(255,72,81,0)');ctx.fillStyle=glow;ctx.beginPath();ctx.ellipse(cx,cy,rx*.55,ry*.55,0,0,Math.PI*2);ctx.fill();
