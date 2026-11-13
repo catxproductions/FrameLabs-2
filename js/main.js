@@ -361,7 +361,7 @@ function startReplayPlayback(){
 }
 function advanceReplay(elapsed){
  if(!replayPlaying||precalcActive||replayTimeline.length<2)return;
- if(!replayIsValid())return;
+ if(replayRevision!==replayRevisionAtBake){clearReplayRecording('Replay invalidated because the simulation changed. Pre-calculate again before replaying.');return}
  const endTime=Number(replayTimeline[replayTimeline.length-1].sim.time)||replayPlayhead;
  replayPlayhead+=Math.max(0,Number(elapsed)||0)*Math.max(.05,Number($('replaySpeed').value)||1);
  if(replayPlayhead>=endTime){
@@ -382,6 +382,7 @@ function countOutOfBounds(bays,levels){
  return removed;
 }
 function configureGridDimensions(baysInput,levelsInput,options={}){
+ invalidateReplay('Replay cleared because the grid dimensions changed.');
  const rawB=Number(baysInput),rawL=Number(levelsInput);
  const bays=clamp(Number.isFinite(rawB)?Math.round(rawB):NX,MIN_BAYS,MAX_BAYS);
  const levels=clamp(Number.isFinite(rawL)?Math.round(rawL):NY,MIN_LEVELS,MAX_LEVELS);
