@@ -170,9 +170,9 @@ function interpolateInto(target, start, end, amount) {
    }
    return;
   }
-  if (!from || !to || !out || typeof from !== 'object' ||
-      typeof to !== 'object' || typeof out !== 'object') {
-   if (discrete) outParent[key] = from;
+  if (from === null || to === null || out === null ||
+      typeof from !== 'object' || typeof to !== 'object' || typeof out !== 'object') {
+   outParent[key] = from;
    return;
   }
   if (alreadyVisited(from, to)) return;
