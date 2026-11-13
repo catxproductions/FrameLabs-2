@@ -7,48 +7,56 @@ function isDiscreteKey(key) {
  return typeof key === 'string' && DISCRETE_KEYS.test(key);
 }
 
+const objectTag = value => Object.prototype.toString.call(value);
+const isArrayBuffer = value => objectTag(value) === '[object ArrayBuffer]';
+const isSharedArrayBuffer = value => objectTag(value) === '[object SharedArrayBuffer]';
+const isView = value => ArrayBuffer.isView(value) ||
+ objectTag(value) === '[object DataView]' ||
+ /^\[object (?:Int|Uint|Uint8Clamped|Float|BigInt|BigUint).*Array\]$/.test(objectTag(value));
+
 function cloneGraph(value, seen = new WeakMap()) {
  if (value === null || typeof value !== 'object') return value;
  if (seen.has(value)) return seen.get(value);
 
- if (value instanceof ArrayBuffer) {
+ if (isArrayBuffer(value)) {
+  // Calling slice on the source object preserves its JavaScript realm.
   const copy = value.slice(0);
   seen.set(value, copy);
   return copy;
  }
- if (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer) {
-  const copy = new SharedArrayBuffer(value.byteLength);
-  new Uint8Array(copy).set(new Uint8Array(value));
+ if (isSharedArrayBuffer(value)) {
+  const copy = new value.constructor(value.byteLength);
+  new value.constructor(copy).set(new value.constructor(value));
   seen.set(value, copy);
   return copy;
  }
- if (ArrayBuffer.isView(value)) {
+ if (isView(value)) {
   const buffer = cloneGraph(value.buffer, seen);
-  const copy = value instanceof DataView
-   ? new DataView(buffer, value.byteOffset, value.byteLength)
+  const copy = objectTag(value) === '[object DataView]'
+   ? new value.constructor(buffer, value.byteOffset, value.byteLength)
    : new value.constructor(buffer, value.byteOffset, value.length);
   seen.set(value, copy);
   return copy;
  }
- if (value instanceof Date) {
-  const copy = new Date(value.getTime());
+ if (value instanceof Date || objectTag(value) === '[object Date]') {
+  const copy = new value.constructor(value.getTime());
   seen.set(value, copy);
   return copy;
  }
- if (value instanceof RegExp) {
-  const copy = new RegExp(value.source, value.flags);
+ if (value instanceof RegExp || objectTag(value) === '[object RegExp]') {
+  const copy = new value.constructor(value.source, value.flags);
   copy.lastIndex = value.lastIndex;
   seen.set(value, copy);
   return copy;
  }
- if (value instanceof Map) {
-  const copy = new Map();
+ if (value instanceof Map || objectTag(value) === '[object Map]') {
+  const copy = new value.constructor();
   seen.set(value, copy);
   for (const [key, entry] of value) copy.set(cloneGraph(key, seen), cloneGraph(entry, seen));
   return copy;
  }
- if (value instanceof Set) {
-  const copy = new Set();
+ if (value instanceof Set || objectTag(value) === '[object Set]') {
+  const copy = new value.constructor();
   seen.set(value, copy);
   for (const entry of value) copy.add(cloneGraph(entry, seen));
   return copy;
@@ -68,7 +76,6 @@ function cloneGraph(value, seen = new WeakMap()) {
  }
  return copy;
 }
-
 function estimateBytes(value) {
  const seen = new WeakSet();
  const buffers = new WeakSet();
@@ -91,7 +98,7 @@ function estimateBytes(value) {
   if (type !== 'object' || seen.has(entry)) return;
   seen.add(entry);
 
-  if (ArrayBuffer.isView(entry)) {
+  if (isView(entry)) {
    if (!buffers.has(entry.buffer)) {
     buffers.add(entry.buffer);
     bytes += entry.buffer.byteLength;
@@ -99,8 +106,7 @@ function estimateBytes(value) {
    bytes += 24;
    return;
   }
-  if (entry instanceof ArrayBuffer ||
-      (typeof SharedArrayBuffer !== 'undefined' && entry instanceof SharedArrayBuffer)) {
+  if (isArrayBuffer(entry) || isSharedArrayBuffer(entry)) {
    if (!buffers.has(entry)) {
     buffers.add(entry);
     bytes += entry.byteLength;
