@@ -137,29 +137,34 @@ function interpolateInto(target, start, end, amount) {
  const alpha = Math.max(0, Math.min(1, Number(amount) || 0));
  const visited = new WeakMap();
 
- function alreadyVisited(a, b) {
-  let partners = visited.get(a);
+ function alreadyVisited(from, to) {
+  let partners = visited.get(from);
   if (!partners) {
    partners = new WeakSet();
-   visited.set(a, partners);
+   visited.set(from, partners);
   }
-  if (partners.has(b)) return true;
-  partners.add(b);
+  if (partners.has(to)) return true;
+  partners.add(to);
   return false;
  }
 
- function walk(out, from, to, key) {
+ function walk(outParent, fromParent, toParent, key) {
   if (isDiscreteKey(key)) return;
+  const out = outParent[key];
+  const from = fromParent[key];
+  const to = toParent[key];
+
   if (typeof from === 'number' && typeof to === 'number' &&
       Number.isFinite(from) && Number.isFinite(to)) {
-   out[key] = from + (to - from) * alpha;
+   outParent[key] = from + (to - from) * alpha;
    return;
   }
   if (ArrayBuffer.isView(from) && ArrayBuffer.isView(to) &&
       ArrayBuffer.isView(out) && from.constructor === to.constructor &&
       from.constructor === out.constructor && from.length === to.length &&
       from.length === out.length && !(from instanceof DataView)) {
-   if (from instanceof BigInt64Array || from instanceof BigUint64Array) return;
+   if (typeof BigInt64Array !== 'undefined' &&
+       (from instanceof BigInt64Array || from instanceof BigUint64Array)) return;
    for (let i = 0; i < from.length; i++) out[i] = from[i] + (to[i] - from[i]) * alpha;
    return;
   }
@@ -190,10 +195,9 @@ function interpolateInto(target, start, end, amount) {
   }
  }
 
- if (target && start && end) walk({ value: target }, { value: start }, { value: end }, 'value');
+ walk({ value: target }, { value: start }, { value: end }, 'value');
  return target;
 }
-
 window.FrameLabReplayTools = Object.freeze({
  cloneGraph,
  estimateBytes,
