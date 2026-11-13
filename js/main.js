@@ -342,6 +342,7 @@ async function runPrecalculation(){
   setReplayStatus(`Pre-calculation failed safely: ${error?.message||'unknown error'}. The original simulation state will be restored.`);
  }finally{
   if(baseline)restoreReplayState(baseline,{restoreRunState:true});
+  if(replayTimeline.length&&replayRevisionAtBake===replayRevision)replayFingerprintAtBake=replayFingerprint();
   precalcActive=false;precalcCancelRequested=false;physicsAccumulator=baseline?Math.max(0,Number(baseline.physicsAccumulator)||0):0;
   for(const el of controls)el.disabled=previousDisabled.get(el);
   canvas.style.pointerEvents=previousPointerEvents;
@@ -382,12 +383,12 @@ function countOutOfBounds(bays,levels){
  return removed;
 }
 function configureGridDimensions(baysInput,levelsInput,options={}){
- invalidateReplay('Replay cleared because the grid dimensions changed.');
  const rawB=Number(baysInput),rawL=Number(levelsInput);
  const bays=clamp(Number.isFinite(rawB)?Math.round(rawB):NX,MIN_BAYS,MAX_BAYS);
  const levels=clamp(Number.isFinite(rawL)?Math.round(rawL):NY,MIN_LEVELS,MAX_LEVELS);
  $('baysInput').value=bays;$('levelsInput').value=levels;
  if(bays===NX&&levels===NY){$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;return true}
+ invalidateReplay('Replay cleared because the grid dimensions changed.');
  const removed=countOutOfBounds(bays,levels),wasRunning=sim.running;
  if(!options.silent&&(removed>0||wasRunning||sim.debris.length>0)){
   const details=[];if(removed)details.push(`${removed} out-of-bounds design element(s) will be removed`);if(wasRunning)details.push('the simulation will pause');if(sim.debris.length)details.push('dynamic motion will be reset while debris still inside the resized area is retained');
