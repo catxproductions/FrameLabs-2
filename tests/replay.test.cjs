@@ -56,7 +56,7 @@ test('graph clone preserves shared ArrayBuffer backing stores and DataView offse
  assert.equal(copy.values.buffer, copy.view.buffer);
  assert.equal(copy.values.byteOffset, 8);
  assert.equal(copy.view.byteOffset, 8);
- assert.equal(copy.view.getFloat64(0), 2.5);
+ assert.equal(copy.view.getFloat64(0, true), 2.5);
  copy.values[0] = 11;
  assert.equal(values[0], 2.5);
  assert.equal(copy.bytes[0], new Uint8Array(new Float64Array([11]).buffer)[0]);
