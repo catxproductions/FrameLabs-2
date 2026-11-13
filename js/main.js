@@ -315,7 +315,7 @@ async function runPrecalculation(){
   setReplayStatus(`Pre-calculating 0.00 / ${(limit*DT).toFixed(2)} seconds…`);
   for(let i=1;i<=limit;i++){
    if(precalcCancelRequested||bakeId!==replayBakeId)break;
-   await stepPhysics(DT);completed=i;
+   ENVIRONMENT.windTime+=DT;await stepPhysics(DT);completed=i;
    const eventSignature=replayEventSignature(),eventChanged=eventSignature!==lastEventSignature;
    if(eventChanged)lastEventSignature=eventSignature;
    if(i%replayConfig.checkpointSteps===0||eventChanged||i===limit||!sim.running){
