@@ -177,86 +177,202 @@ class Connection {
 let BuildingMap=newBuildingMap();let mode='build',hover={x:0,y:1,valid:false},dragging=false,lastDragKey='',lastDragPt=null,buildLastCell=null,buildPainted=new Set(),lastAnalysis=null,frame=0,previous=performance.now();
 let sim=newPhysicsState();
 const replayConfig={checkpointSteps:30,maxBytes:64*1024*1024,maxSteps:1200};
-let precalcActive=false,precalcCancelRequested=false,replayTimeline=[],replayPlaying=false,replayElapsed=0,replayIndex=0,replayBakeId=0,replayFingerprintAtBake='';
+let precalcActive=false,precalcCancelRequested=false,replayTimeline=[],replayPlaying=false,replayPlayhead=0,replayIndex=0,replayBakeId=0,replayFingerprintAtBake='';
+let replayRevision=0,replayRevisionAtBake=-1,replayWorkingState=null,replayWorkingSegment=-1,replayRenderFrames=0;
 function cloneReplayGraph(value){return window.FrameLabReplayTools.cloneGraph(value)}
-function captureReplayState(){const state=cloneReplayGraph({sim,BuildingMap,environment:ENVIRONMENT,NX,NY});state.sim.running=false;return state}
+function captureReplayState(){
+ const state=cloneReplayGraph({sim,BuildingMap,environment:ENVIRONMENT,NX,NY,physicsAccumulator,wasRunning:!!sim.running});
+ state.sim.running=false;
+ return state;
+}
 function replayStateBytes(state){return window.FrameLabReplayTools.estimateBytes(state)}
-function restoreReplayState(saved){
- const state=cloneReplayGraph(saved);sim=state.sim;BuildingMap=state.BuildingMap;NX=state.NX;NY=state.NY;
+function restoreReplayState(saved,options={}){
+ const state=cloneReplayGraph(saved);
+ sim=state.sim;BuildingMap=state.BuildingMap;NX=state.NX;NY=state.NY;
  DX=(GRID_RIGHT-GRID_LEFT)/NX;STORY_PX=(GROUND_Y-120)/NY;Object.assign(ENVIRONMENT,state.environment);
- sim.running=false;physicsAccumulator=0;gravityTether=null;dragging=false;
+ sim.running=!!options.restoreRunState&&!!state.wasRunning;
+ physicsAccumulator=options.restoreRunState?Math.max(0,Number(state.physicsAccumulator)||0):0;
+ gravityTether=null;dragging=false;lastDragKey='';lastDragPt=null;buildLastCell=null;
+ previous=performance.now();
  $('baysInput').value=NX;$('levelsInput').value=NY;$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;
- refreshAnalysis();updateMetrics();draw();syncButtons();
+ refreshAnalysis();updateMetrics();draw();syncButtons();updateReplayControls();
 }
 function replayFingerprint(){
  const design={NX,NY,members:{},environment:{moisture:ENVIRONMENT.moisture,waterLevel:ENVIRONMENT.waterLevel,windSpeed:ENVIRONMENT.windSpeed,windDirection:ENVIRONMENT.windDirection},computeMode:$('computeMode')?.value,quality:$('qualityPreset')?.value};
  for(const group of Object.keys(BuildingMap).sort())design.members[group]=Object.entries(BuildingMap[group]||{}).sort(([a],[b])=>a.localeCompare(b)).map(([key,e])=>[key,e.x,e.y,e.material,e.mass,e.capacity,e.kind,e.direction]);
  try{return JSON.stringify(design)}catch(_){return ''}
 }
+function replayEventSignature(){
+ const memberEvents=[];
+ for(const group of ['columns','beams','slabs','braces']){
+  for(const [key,e] of Object.entries(BuildingMap[group]||{})){
+   const flags=[e.failed,e.snapped,e.burning,e.detonated].map(Boolean);
+   if(flags.some(Boolean))memberEvents.push(`${group}:${key}:${flags.map(Number).join('')}`);
+  }
+ }
+ const brokenConnections=Object.entries(sim.connectionStates||{}).filter(([,state])=>state?.broken).map(([key])=>key).sort();
+ return JSON.stringify([sim.localFailureCount||0,sim.debris?.length||0,sim.explosionEffects?.length||0,sim.lastEvent||'',memberEvents,brokenConnections]);
+}
 function setReplayStatus(message){const node=$('replayStatus');if(node)node.textContent=message}
 function updateReplayControls(){
- const has=replayTimeline.length>1,slider=$('replayTimeline');$('replayPlay').disabled=!has||replayPlaying;$('replayPause').disabled=!has||!replayPlaying;$('replayStop').disabled=!has;
- slider.disabled=!has;slider.max=String(Math.max(0,replayTimeline.length-1));slider.value=String(Math.min(replayIndex,Math.max(0,replayTimeline.length-1)));
- const state=replayTimeline[replayIndex];$('replayTimeLabel').textContent=state?`${Number(state.sim.time).toFixed(2)} s`:'0.00 s';
+ const has=replayTimeline.length>1,slider=$('replayTimeline');
+ const first=has?Number(replayTimeline[0].sim.time)||0:0;
+ const last=has?Number(replayTimeline[replayTimeline.length-1].sim.time)||first:first;
+ $('replayPlay').disabled=!has||replayPlaying;$('replayPause').disabled=!has||!replayPlaying;$('replayStop').disabled=!has;
+ slider.disabled=!has;slider.min=String(first);slider.max=String(Math.max(first,last));slider.step='0.01';
+ slider.value=String(Math.max(first,Math.min(last,Number(replayPlayhead)||first)));
+ $('replayTimeLabel').textContent=`${(has?Math.max(first,Math.min(last,Number(replayPlayhead)||first)):0).toFixed(2)} s`;
 }
-function stopReplayPlayback(){replayPlaying=false;replayElapsed=0;updateReplayControls()}
-function seekReplay(index){
- if(!replayTimeline.length)return;
- if(replayFingerprint()!==replayFingerprintAtBake){stopReplayPlayback();setReplayStatus('Replay is stale: design, environment, or compute settings changed. Bake again before replaying.');return}
- replayIndex=Math.max(0,Math.min(replayTimeline.length-1,Math.round(Number(index)||0)));stopReplayPlayback();restoreReplayState(replayTimeline[replayIndex]);updateReplayControls();
- setReplayStatus(`Replay checkpoint ${replayIndex+1}/${replayTimeline.length} · ${Number(sim.time).toFixed(2)} s. Timeline seeks recorded physics checkpoints.`);
+function stopReplayPlayback(){replayPlaying=false;updateReplayControls()}
+function clearReplayRecording(message){
+ const hadRecording=replayTimeline.length>0||replayPlaying;
+ replayPlaying=false;replayTimeline=[];replayIndex=0;replayPlayhead=0;
+ replayFingerprintAtBake='';replayRevisionAtBake=-1;replayWorkingState=null;replayWorkingSegment=-1;
+ updateReplayControls();
+ if(message&&hadRecording)setReplayStatus(message);
+ return hadRecording;
+}
+function invalidateReplay(message='Replay cleared because the simulation changed. Bake again to create a current recording.'){
+ if(precalcActive)return false;
+ replayRevision++;
+ return clearReplayRecording(message);
+}
+function replayIsValid(){
+ if(!replayTimeline.length)return false;
+ if(replayRevision!==replayRevisionAtBake||replayFingerprint()!==replayFingerprintAtBake){
+  clearReplayRecording('Replay is outdated because the design, simulation, environment, or compute settings changed. Pre-calculate again before replaying.');
+  return false;
+ }
+ return true;
+}
+function applyReplayWorkingState(state,refresh=false){
+ sim=state.sim;BuildingMap=state.BuildingMap;NX=state.NX;NY=state.NY;
+ DX=(GRID_RIGHT-GRID_LEFT)/NX;STORY_PX=(GROUND_Y-120)/NY;Object.assign(ENVIRONMENT,state.environment);
+ sim.running=false;physicsAccumulator=0;gravityTether=null;dragging=false;
+ if(refresh){refreshAnalysis();updateMetrics()}
+ draw();
+}
+function findReplaySegment(time){
+ let low=0,high=replayTimeline.length-1;
+ while(low<high){
+  const middle=Math.ceil((low+high)/2);
+  if(Number(replayTimeline[middle].sim.time)<=time)low=middle;
+  else high=middle-1;
+ }
+ return low;
+}
+function renderReplayAtTime(time,forceRefresh=false){
+ if(!replayTimeline.length)return false;
+ const firstTime=Number(replayTimeline[0].sim.time)||0;
+ const lastTime=Number(replayTimeline[replayTimeline.length-1].sim.time)||firstTime;
+ replayPlayhead=Math.max(firstTime,Math.min(lastTime,Number(time)||firstTime));
+ replayIndex=findReplaySegment(replayPlayhead);
+ if(replayIndex>=replayTimeline.length-1){
+  if(replayWorkingSegment!==replayIndex){
+   replayWorkingState=cloneReplayGraph(replayTimeline[replayIndex]);
+   replayWorkingSegment=replayIndex;
+  }
+ }else{
+  if(replayWorkingSegment!==replayIndex){
+   replayWorkingState=cloneReplayGraph(replayTimeline[replayIndex]);
+   replayWorkingSegment=replayIndex;
+  }
+  const from=replayTimeline[replayIndex],to=replayTimeline[replayIndex+1];
+  const fromTime=Number(from.sim.time)||0,toTime=Number(to.sim.time)||fromTime;
+  const alpha=toTime>fromTime?clamp((replayPlayhead-fromTime)/(toTime-fromTime),0,1):0;
+  window.FrameLabReplayTools.interpolateInto(replayWorkingState,from,to,alpha);
+ }
+ applyReplayWorkingState(replayWorkingState,forceRefresh||((replayRenderFrames++%4)===0));
+ updateReplayControls();
+ return true;
+}
+function seekReplay(time){
+ if(!replayIsValid())return;
+ stopReplayPlayback();
+ if(sim.running){sim.running=false;physicsAccumulator=0;syncButtons()}
+ renderReplayAtTime(time,true);
+ setReplayStatus(`Replay position ${sim.time.toFixed(2)} s · interpolated between recorded physics checkpoints.`);
 }
 async function runPrecalculation(){
  if(precalcActive)return;
  if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before pre-calculating physics.',false);return}
  if(physicsStepBusy){setStatus('Wait for the current physics step to finish, then start pre-calculation.',false);return}
+ invalidateReplay('Previous replay recording replaced by a new pre-calculation.');
  stopReplayPlayback();precalcActive=true;precalcCancelRequested=false;const bakeId=++replayBakeId;
  const controls=[...document.querySelectorAll('.panel button,.panel input,.panel select')].filter(el=>el.id!=='cancelPrecalculate');
  const previousDisabled=new Map(controls.map(el=>[el,el.disabled]));for(const el of controls)el.disabled=true;
+ const previousPointerEvents=canvas.style.pointerEvents,previousAriaDisabled=canvas.getAttribute('aria-disabled');
+ canvas.style.pointerEvents='none';canvas.setAttribute('aria-disabled','true');
+ dragging=false;lastDragKey='';lastDragPt=null;buildLastCell=null;
  $('cancelPrecalculate').disabled=false;$('precalculate').textContent='Baking…';
  const progress=$('precalcProgress');progress.max=1;progress.value=0;
  let baseline=null,timeline=[],usedBytes=0,completed=0,limit=Math.max(1,Math.min(replayConfig.maxSteps,Math.round(Number($('precalcDuration').value||5)/DT))),memoryLimited=false;
  try{
   baseline=captureReplayState();usedBytes=replayStateBytes(baseline);timeline.push(baseline);
+  if(usedBytes>replayConfig.maxBytes)throw new Error('The starting state exceeds the 64 MiB replay memory budget.');
   sim.running=true;sim.peakUtil=lastAnalysis?.maxUtil||0;physicsAccumulator=0;
+  let lastEventSignature=replayEventSignature();
   setReplayStatus(`Pre-calculating 0.00 / ${(limit*DT).toFixed(2)} seconds…`);
   for(let i=1;i<=limit;i++){
    if(precalcCancelRequested||bakeId!==replayBakeId)break;
-   await stepPhysics(DT);completed=i;
-   if(i%replayConfig.checkpointSteps===0||i===limit||!sim.running){
+   ENVIRONMENT.windTime+=DT;await stepPhysics(DT);completed=i;
+   const eventSignature=replayEventSignature(),eventChanged=eventSignature!==lastEventSignature;
+   if(eventChanged)lastEventSignature=eventSignature;
+   if(i%replayConfig.checkpointSteps===0||eventChanged||i===limit||!sim.running){
     const checkpoint=captureReplayState(),bytes=replayStateBytes(checkpoint);
     if(usedBytes+bytes>replayConfig.maxBytes){memoryLimited=true;break}
     timeline.push(checkpoint);usedBytes+=bytes;
    }
    progress.value=i/limit;
-   if(i%6===0){setReplayStatus(`Pre-calculating ${(i*DT).toFixed(2)} / ${(limit*DT).toFixed(2)} seconds · ${Math.round(i/limit*100)}% · ${Math.ceil(usedBytes/1048576)} MB estimated`);await new Promise(resolve=>setTimeout(resolve,0))}
+   if(i%6===0){setReplayStatus(`Pre-calculating ${(i*DT).toFixed(2)} / ${(limit*DT).toFixed(2)} seconds · ${Math.round(i/limit*100)}% · ${Math.ceil(usedBytes/1048576)} MiB estimated`);await new Promise(resolve=>setTimeout(resolve,0))}
    if(!sim.running)break;
   }
-  if(precalcCancelRequested||bakeId!==replayBakeId){restoreReplayState(baseline);setReplayStatus('Pre-calculation cancelled; original simulation state restored.');return}
-  replayTimeline=timeline;replayIndex=0;restoreReplayState(baseline);replayFingerprintAtBake=replayFingerprint();updateReplayControls();
-  if(memoryLimited)setReplayStatus(`Bake stopped at the 64 MB replay memory budget. Saved ${replayTimeline.length} checkpoints; shorten the duration or use a smaller design.`);
-  else if(replayTimeline.length>1)setReplayStatus(`Bake complete: ${replayTimeline.length} checkpoints across ${Number(replayTimeline[replayTimeline.length-1].sim.time-replayTimeline[0].sim.time).toFixed(2)} simulated seconds · ${Math.ceil(usedBytes/1048576)} MB estimated. Replay supports seek, pause, and speed controls.`);
+  if(precalcCancelRequested||bakeId!==replayBakeId){
+   replayTimeline=[];setReplayStatus('Pre-calculation cancelled; the original simulation state will be restored.');
+   return;
+  }
+  replayTimeline=timeline;replayIndex=0;replayPlayhead=Number(timeline[0]?.sim.time)||0;
+  replayRevisionAtBake=replayRevision;replayFingerprintAtBake=replayFingerprint();
+  replayWorkingState=null;replayWorkingSegment=-1;
+  if(memoryLimited)setReplayStatus(`Bake stopped at the 64 MiB replay budget. Saved ${replayTimeline.length} checkpoints; shorten the duration or use a smaller design.`);
+  else if(replayTimeline.length>1)setReplayStatus(`Bake complete: ${replayTimeline.length} checkpoints across ${(Number(replayTimeline[replayTimeline.length-1].sim.time)-Number(replayTimeline[0].sim.time)).toFixed(2)} simulated seconds · ${Math.ceil(usedBytes/1048576)} MiB estimated. Replay now interpolates between checkpoints and preserves recorded event boundaries.`);
   else setReplayStatus('No replay checkpoints were produced. Try a longer duration or a smaller model.');
- }catch(error){if(baseline)restoreReplayState(baseline);replayTimeline=[];updateReplayControls();setReplayStatus(`Pre-calculation failed safely: ${error?.message||'unknown error'}. Starting state restored.`)}
- finally{
-  if(baseline&&sim.running)restoreReplayState(baseline);
-  precalcActive=false;precalcCancelRequested=false;physicsAccumulator=0;
+ }catch(error){
+  replayTimeline=[];replayWorkingState=null;replayWorkingSegment=-1;
+  setReplayStatus(`Pre-calculation failed safely: ${error?.message||'unknown error'}. The original simulation state will be restored.`);
+ }finally{
+  if(baseline)restoreReplayState(baseline,{restoreRunState:true});
+  if(replayTimeline.length&&replayRevisionAtBake===replayRevision)replayFingerprintAtBake=replayFingerprint();
+  precalcActive=false;precalcCancelRequested=false;physicsAccumulator=baseline?Math.max(0,Number(baseline.physicsAccumulator)||0):0;
   for(const el of controls)el.disabled=previousDisabled.get(el);
-  $('cancelPrecalculate').disabled=true;$('precalculate').textContent='Pre-calculate';progress.value=completed/limit;updateReplayControls();draw();
+  canvas.style.pointerEvents=previousPointerEvents;
+  if(previousAriaDisabled==null)canvas.removeAttribute('aria-disabled');else canvas.setAttribute('aria-disabled',previousAriaDisabled);
+  $('cancelPrecalculate').disabled=true;$('precalculate').textContent='Pre-calculate';progress.value=completed/limit;
+  updateReplayControls();previous=performance.now();draw();
  }
 }
 function cancelPrecalculation(){if(!precalcActive)return;precalcCancelRequested=true;replayBakeId++;$('cancelPrecalculate').disabled=true;setReplayStatus('Cancelling after the current solver step…')}
 function startReplayPlayback(){
- if(replayTimeline.length<2)return;
- if(replayFingerprint()!==replayFingerprintAtBake){setReplayStatus('Replay is stale: design, environment, or compute settings changed. Bake again before replaying.');return}
- if(replayIndex>=replayTimeline.length-1)seekReplay(0);
- replayPlaying=true;replayElapsed=0;updateReplayControls();setReplayStatus('Replay playing from recorded checkpoints.');
+ if(!replayIsValid())return;
+ if(sim.running){sim.running=false;physicsAccumulator=0;syncButtons()}
+ const firstTime=Number(replayTimeline[0].sim.time)||0,lastTime=Number(replayTimeline[replayTimeline.length-1].sim.time)||firstTime;
+ if(replayPlayhead>=lastTime-1e-6)replayPlayhead=firstTime;
+ renderReplayAtTime(replayPlayhead,true);
+ replayPlaying=true;updateReplayControls();setReplayStatus('Replay playing with continuous interpolation between recorded checkpoints.');
 }
 function advanceReplay(elapsed){
  if(!replayPlaying||precalcActive||replayTimeline.length<2)return;
- replayElapsed+=elapsed*Math.max(.05,Number($('replaySpeed').value)||1);const interval=replayConfig.checkpointSteps*DT;
- while(replayElapsed>=interval&&replayPlaying){replayElapsed-=interval;if(replayIndex>=replayTimeline.length-1){stopReplayPlayback();setReplayStatus('Replay finished. Seek the timeline to inspect a recorded checkpoint.');break}replayIndex++;restoreReplayState(replayTimeline[replayIndex]);updateReplayControls()}
+ if(replayRevision!==replayRevisionAtBake){clearReplayRecording('Replay invalidated because the simulation changed. Pre-calculate again before replaying.');return}
+ const endTime=Number(replayTimeline[replayTimeline.length-1].sim.time)||replayPlayhead;
+ replayPlayhead+=Math.max(0,Number(elapsed)||0)*Math.max(.05,Number($('replaySpeed').value)||1);
+ if(replayPlayhead>=endTime){
+  renderReplayAtTime(endTime,true);stopReplayPlayback();
+  setReplayStatus('Replay finished. Seek the timeline to inspect any recorded moment.');
+  return;
+ }
+ renderReplayAtTime(replayPlayhead);
 }
+
 
 function countOutOfBounds(bays,levels){
  let removed=0;
@@ -272,6 +388,7 @@ function configureGridDimensions(baysInput,levelsInput,options={}){
  const levels=clamp(Number.isFinite(rawL)?Math.round(rawL):NY,MIN_LEVELS,MAX_LEVELS);
  $('baysInput').value=bays;$('levelsInput').value=levels;
  if(bays===NX&&levels===NY){$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;return true}
+ invalidateReplay('Replay cleared because the grid dimensions changed.');
  const removed=countOutOfBounds(bays,levels),wasRunning=sim.running;
  if(!options.silent&&(removed>0||wasRunning||sim.debris.length>0)){
   const details=[];if(removed)details.push(`${removed} out-of-bounds design element(s) will be removed`);if(wasRunning)details.push('the simulation will pause');if(sim.debris.length)details.push('dynamic motion will be reset while debris still inside the resized area is retained');
@@ -377,7 +494,7 @@ function makeElement(kind, x, y, material) {
   chainDepth: 0
  };
 }
-function resetPhysics(restoreMembers=false){dragging=false;lastDragKey='';lastDragPt=null;gravityTether=null;sim=newPhysicsState();if(!restoreMembers){sim.connectionStates=Object.create(null)}if(restoreMembers){sim.connectionStates=Object.create(null);for(const {e} of allMembers()){e.integrity=1;e.structuralIntegrity=1;e.failed=false;e.snapped=false;e.shattered=false;e.snapSag=0;e.snapVelocity=0;e.snapAge=0;e.snapCenterX=null;e.momentOverloadTime=0;e.bendingMoment=0;e.momentUtilization=0;e.effectiveSpan=1;e.sag=0;e.sagVelocity=0;e.plasticSag=0;e.sagging=false;e.catenaryTension=0;e.catenaryRatio=0;e.connectionFactor=1;e.jointDamageA=0;e.jointDamageB=0;e.plasticMoment=0;e.tiltAngle=0;e.lateralForce=0;e.impactDamage=0;e.impactDeformation=0;e.elasticDeformation=0;e.plasticDeformation=0;e.impactStress=0;e.lastImpactEnergy=0;e.lastImpactTime=-Infinity;e.debrisSpawned=false;e.failureReason='';e.state='intact';e.demand=0;e.utilization=0;e.unsupported=false;e.isFreefalling=false;e.dynamicUtilization=0;e.burning=false;e.fuelRemaining=isFlammableMaterial(e.material)?1:0;e.heatExposure=0;e.thermalDamage=0;e.fireSpreadClock=0;e.burnTime=0;e.smokeEmissionClock=0;e.ignitionReason='';e.explosivePrimed=false;e.detonated=false;e.chainDepth=0}for(const l of Object.values(BuildingMap.loads)){l.integrity=1;l.failed=false}}sim.running=false;syncButtons();refreshAll()}
+function resetPhysics(restoreMembers=false){invalidateReplay('Replay cleared because physics was reset.');dragging=false;lastDragKey='';lastDragPt=null;gravityTether=null;sim=newPhysicsState();if(!restoreMembers){sim.connectionStates=Object.create(null)}if(restoreMembers){sim.connectionStates=Object.create(null);for(const {e} of allMembers()){e.integrity=1;e.structuralIntegrity=1;e.failed=false;e.snapped=false;e.shattered=false;e.snapSag=0;e.snapVelocity=0;e.snapAge=0;e.snapCenterX=null;e.momentOverloadTime=0;e.bendingMoment=0;e.momentUtilization=0;e.effectiveSpan=1;e.sag=0;e.sagVelocity=0;e.plasticSag=0;e.sagging=false;e.catenaryTension=0;e.catenaryRatio=0;e.connectionFactor=1;e.jointDamageA=0;e.jointDamageB=0;e.plasticMoment=0;e.tiltAngle=0;e.lateralForce=0;e.impactDamage=0;e.impactDeformation=0;e.elasticDeformation=0;e.plasticDeformation=0;e.impactStress=0;e.lastImpactEnergy=0;e.lastImpactTime=-Infinity;e.debrisSpawned=false;e.failureReason='';e.state='intact';e.demand=0;e.utilization=0;e.unsupported=false;e.isFreefalling=false;e.dynamicUtilization=0;e.burning=false;e.fuelRemaining=isFlammableMaterial(e.material)?1:0;e.heatExposure=0;e.thermalDamage=0;e.fireSpreadClock=0;e.burnTime=0;e.smokeEmissionClock=0;e.ignitionReason='';e.explosivePrimed=false;e.detonated=false;e.chainDepth=0}for(const l of Object.values(BuildingMap.loads)){l.integrity=1;l.failed=false}}sim.running=false;syncButtons();refreshAll()}
 function screenX(x,level=0){const node=sim.nodes[keyOf(x,level)];const worldX=node?node.position.x/STORY_HEIGHT:x;return GRID_LEFT+worldX*DX+sim.lateralDisp[Math.max(0,Math.min(NY,level))]*23}
 function screenYNode(x,level){const node=sim.nodes[keyOf(x,level)];const worldY=node?node.position.y:level*STORY_HEIGHT;return GROUND_Y-(worldY/STORY_HEIGHT)*STORY_PX}
 function screenYLevel(level){const index=Math.max(0,Math.min(NY,level));const matching=Object.values(sim.nodes).filter(n=>n.referenceLevel===index);if(matching.length)return GROUND_Y-(matching.reduce((sum,n)=>sum+n.position.y,0)/matching.length/STORY_HEIGHT)*STORY_PX;return GROUND_Y-(sim.floors[index].position.y/STORY_HEIGHT)*STORY_PX}
@@ -1071,7 +1188,7 @@ function findGravityTetherTarget(px,py){let best=null,bestDistance=Infinity;cons
 function beginGravityTether(p,e){const target=findGravityTetherTarget(p.x,p.y);if(!target){setStatus('Gravity tether: click close to a structural joint or loose debris piece, then drag.',true);return false}gravityTether=target;if(target.kind==='debris'){const d=sim.debris.find(item=>item.id===target.id);if(d){d.settled=false;d.grounded=false}}dragging=true;canvas.setPointerCapture?.(e.pointerId);sim.running=true;syncButtons();setStatus('Gravity tether engaged. The cursor is connected by a damped spring; release to let the object swing and settle.',true);return true}
 function drawGravityTether(){if(!gravityTether)return;let ax=0,ay=0;if(gravityTether.kind==='debris'){const d=sim.debris.find(item=>item.id===gravityTether.id);if(!d){gravityTether=null;return}const c=Math.cos(d.angle),s=Math.sin(d.angle),lx=gravityTether.localX||0,ly=gravityTether.localY||0;ax=GRID_LEFT+(d.x+lx*c-ly*s)/STORY_HEIGHT*DX;ay=GROUND_Y-(d.y+lx*s+ly*c)/STORY_HEIGHT*STORY_PX}else{const node=sim.nodes[gravityTether.nodeKey];if(!node){gravityTether=null;return}ax=screenX(node.gridX,node.referenceLevel);ay=screenYNode(node.gridX,node.referenceLevel)}const tx=GRID_LEFT+(gravityTether.targetX||0)/STORY_HEIGHT*DX,ty=GROUND_Y-(gravityTether.targetY||0)/STORY_HEIGHT*STORY_PX;ctx.save();ctx.strokeStyle='rgba(100,229,231,.9)';ctx.lineWidth=2;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(tx,ty);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='rgba(91,229,231,.16)';ctx.strokeStyle='#76eff0';ctx.beginPath();ctx.arc(tx,ty,7,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.beginPath();ctx.arc(ax,ay,4,0,Math.PI*2);ctx.fillStyle='#e5ffff';ctx.fill();ctx.restore()}
 
-function mutateLayout(msg){const analysis=refreshAnalysis();updateMetrics();draw();setStatus(msg,true);setStatus(`Design changed. Live estimates refreshed; peak modeled utilization is ${(analysis.maxUtil*100).toFixed(0)}%. Select Validate for a written structural check.`,false);if(sim.running)setStatus(msg+' Physics is continuing with the updated BuildingMap.',true)}
+function mutateLayout(msg){invalidateReplay('Replay cleared because the structure changed. Bake again to capture the updated design.');const analysis=refreshAnalysis();updateMetrics();draw();setStatus(msg,true);setStatus(`Design changed. Live estimates refreshed; peak modeled utilization is ${(analysis.maxUtil*100).toFixed(0)}%. Select Validate for a written structural check.`,false);if(sim.running)setStatus(msg+' Physics is continuing with the updated BuildingMap.',true)}
 function placeOneRaw(group,key,kind,x,y,material,direction){
  const existing=BuildingMap[group][key];if(existing&&!existing.failed&&!existing.snapped&&existing.material===material&&existing.direction===(direction||existing.direction))return false;
  for(const suffix of ['a','b'])delete sim.connectionStates[connectionId(`${group}|${key}`,suffix)];
@@ -1633,6 +1750,7 @@ function igniteAt(px, py) {
  return false;
 }
 function handleCanvasDown(e){
+ if(precalcActive){e.preventDefault();return;}invalidateReplay('Replay cleared because the canvas was edited. Bake again to capture the updated simulation.');
  e.preventDefault();const p=canvasCoords(e);
  if(mode==='build'){
   const kind=$('componentType').value;
@@ -1647,10 +1765,10 @@ function handleCanvasDown(e){
   const pos=snapBay(p.x,p.y);if(mode==='load')addLoad(pos.x,pos.y);else pushAt(pos.x,pos.y,p.x);
  }else if(mode==='ignite'){igniteAt(p.x,p.y)}else if(mode==='explosion'){detonateAt(p.x,p.y)}else if(mode==='tether'){beginGravityTether(p,e)}
 }
-function handlePointerMove(e){const p=canvasCoords(e);if(mode==='tether'&&dragging&&gravityTether){const world=worldCoords(p.x,p.y);gravityTether.targetX=world.x;gravityTether.targetY=world.y;gravityTether.targetScreenX=p.x;gravityTether.targetScreenY=p.y;hover.valid=false;draw();return}const kind=$('componentType').value,valid=mode==='explosion'?(p.x>=GRID_LEFT&&p.x<=GRID_RIGHT&&p.y>=gridY(NY)&&p.y<=GROUND_Y):(mode==='ignite'||mode==='break')?((nearestElement(p.x,p.y)?.distance??Infinity)<=20):isGridTarget(p.x,p.y,kind==='build'?kind:'bay'),pos=gridPositionForKind(p.x,p.y,kind);hover={...pos,valid:valid&&mode!=='demolish'};
+function handlePointerMove(e){if(precalcActive)return;const p=canvasCoords(e);if(mode==='tether'&&dragging&&gravityTether){const world=worldCoords(p.x,p.y);gravityTether.targetX=world.x;gravityTether.targetY=world.y;gravityTether.targetScreenX=p.x;gravityTether.targetScreenY=p.y;hover.valid=false;draw();return}const kind=$('componentType').value,valid=mode==='explosion'?(p.x>=GRID_LEFT&&p.x<=GRID_RIGHT&&p.y>=gridY(NY)&&p.y<=GROUND_Y):(mode==='ignite'||mode==='break')?((nearestElement(p.x,p.y)?.distance??Infinity)<=20):isGridTarget(p.x,p.y,kind==='build'?kind:'bay'),pos=gridPositionForKind(p.x,p.y,kind);hover={...pos,valid:valid&&mode!=='demolish'};
  if(dragging&&mode==='build'&&valid&&buildLastCell){const next=snapForBuild(p.x,p.y);if(next.x!==buildLastCell.x||next.y!==buildLastCell.y){const n=paintLineBetween(buildLastCell,next);buildLastCell=next;if(n)mutateLayout(`Continuous placement: added ${n} ${kind==='crossbrace'?'X-bracing':kind==='brace'?'diagonal brace':kind}(s).`);else draw()}}
  else if(dragging&&(mode==='demolish'||mode==='break')&&lastDragPt&&Math.hypot(p.x-lastDragPt.x,p.y-lastDragPt.y)>9){lastDragPt={x:p.x,y:p.y};if(mode==='demolish')demolishAt(p.x,p.y);else breakAt(p.x,p.y)}draw()}
-function handlePointerUp(){if(mode==='tether')gravityTether=null;dragging=false;lastDragKey='';lastDragPt=null;buildLastCell=null;buildPainted=new Set();draw()}
+function handlePointerUp(){if(precalcActive)return;if(mode==='tether')gravityTether=null;dragging=false;lastDragKey='';lastDragPt=null;buildLastCell=null;buildPainted=new Set();draw()}
 function targetStoryElements(story,floorLevel){const targets=[];for(const e of Object.values(BuildingMap.columns))if(e.y===story)targets.push(e);for(const group of ['beams','slabs'])for(const e of Object.values(BuildingMap[group]))if(e.y===floorLevel)targets.push(e);for(const e of Object.values(BuildingMap.braces))if(e.y===floorLevel||e.y+1===floorLevel)targets.push(e);return targets}
 function physicalComponent(nodeKey){
  const adjacency=Object.create(null);for(const key of Object.keys(sim.nodes))adjacency[key]=[];
@@ -2559,7 +2677,7 @@ function drawStabilityVector(){
 }
 function validateDesign(){const a=refreshAnalysis();draw();if(!a.count){setStatus('Empty design. Place columns, beams and slabs before validating.');return}const detached=Object.values(sim.nodes).filter(n=>n.referenceLevel>0&&!n.isGroundConnected).length,st=sim.stability.primary,angleDeg=st?Math.abs(st.dynamics.rotation)*180/Math.PI:0,stabilityText=!st?'No assembly stability estimate available.':!st.supportPoints.length?'No foundation supports remain for the highlighted assembly.':st.shouldTip?`Center of mass lies ${Math.abs(st.marginWorld/STORY_HEIGHT).toFixed(2)} bay-widths outside the support span; predicted tipping is toward the ${st.tippingDirection}.`:angleDeg>=18?`Assembly tilt is ${angleDeg.toFixed(0)}°, above the 18° cascading-stress threshold; the current lean is toward the ${st.tippingDirection}.`:`Center-of-mass projection is within the support span (${Math.round(st.stabilityMetric)}% stability margin).`;const msg=a.issues.length||detached?`INSUFFICIENT SUPPORT · ${a.issues.length} static issue(s), ${detached} joint(s) without a continuous healthy path to the foundation. ${stabilityText} ${a.issues.slice(0,2).join(' ')}`:st?.shouldTip?`DIRECTIONAL TIPPING RISK · ${st.tippingDirection.toUpperCase()}. ${stabilityText}`:angleDeg>=18?`CASCADE RISK · TILT-INDUCED MEMBER STRESS IS ABOVE THE CRITICAL ANGLE. ${stabilityText}`:a.maxUtil>1?`OVER CAPACITY · Peak utilization ${(a.maxUtil*100).toFixed(0)}%. ${a.overloaded} member(s) exceed modeled capacity. ${stabilityText}`:`STRUCTURALLY SOUND IN THIS MODEL · Peak utilization ${(a.maxUtil*100).toFixed(0)}%. ${stabilityText}`;setStatus(a.failedMembers?`${msg} ${a.failedMembers} member(s) are failed or hinged and excluded from active capacity; detached failed members become debris.`:msg);if(a.warnings.length)setStatus(`Notes: ${a.warnings.slice(0,2).join(' ')}`,true);else setStatus('Validation includes local column load paths, capacity redistribution to connected neighboring supports, floating-cluster detection and member integrity. This remains a simplified educational estimate.',true)}
 function syncButtons(){document.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode))});$('liveDot').classList.toggle('running',sim.running);$('simulate').textContent=sim.running?'Ⅱ Pause':'▶ Simulate';$('simulate').setAttribute('aria-pressed',String(sim.running))}
-function startOrPause(){if(precalcActive)return;if(replayPlaying||replayTimeline.length){stopReplayPlayback();replayTimeline=[];updateReplayControls()}if(sim.running){sim.running=false;syncButtons();updateMetrics();return}if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before starting physics.');return}refreshAnalysis();sim.running=true;sim.peakUtil=lastAnalysis.maxUtil;syncButtons();setStatus('Simulation started. Local load redistribution, bending fracture, debris rigid-body motion, swept contact checks, mass-weighted impulses, rotated debris collisions with friction and angular response, material impact resistance, deformation, fragmentation and distance-limited shockwave damage are active.',true);}
+function startOrPause(){if(precalcActive)return;if(replayPlaying||replayTimeline.length)invalidateReplay('Replay cleared because live simulation was started or paused.');if(sim.running){sim.running=false;syncButtons();updateMetrics();return}if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before starting physics.');return}refreshAnalysis();sim.running=true;sim.peakUtil=lastAnalysis.maxUtil;syncButtons();setStatus('Simulation started. Local load redistribution, bending fracture, debris rigid-body motion, swept contact checks, mass-weighted impulses, rotated debris collisions with friction and angular response, material impact resistance, deformation, fragmentation and distance-limited shockwave damage are active.',true);}
 function clearDesign(){if(!confirm('Clear all columns, beams, slabs and loads?'))return;BuildingMap=newBuildingMap();resetPhysics(false);setStatus('Empty design. Place columns, beams and slabs, then choose Validate.',false);setStatus('Design cleared. Build Mode is ready.',true)}
 function exampleFrame(){BuildingMap=newBuildingMap();const supports=[...new Set([Math.round(NX*.16),Math.round(NX*.42),Math.round(NX*.68),Math.round(NX*.92)].map(x=>clamp(x,0,NX)))].sort((a,b)=>a-b),levels=Math.min(4,NY);for(const x of supports)for(let y=0;y<levels;y++)BuildingMap.columns[keyOf(x,y)]=makeElement('column',x,y,'steel');for(let y=1;y<=levels;y++)for(let x=supports[0];x<supports[supports.length-1];x++){BuildingMap.beams[keyOf(x,y)]=makeElement('beam',x,y,'steel');BuildingMap.slabs[keyOf(x,y)]=makeElement('slab',x,y,'concrete')}const midBay=clamp(Math.floor((supports[0]+supports[supports.length-1])*.5),0,NX-1);for(const x of [clamp(midBay-1,0,NX-1),midBay])if(x<NX)BuildingMap.loads[keyOf(x,levels)]={x,y:levels,mass:2,capacity:0,integrity:1,failed:false,kind:'load'};for(const y of [1,Math.min(3,levels-1)])if(y<NY){const x=clamp(midBay-1,0,NX-1);for(const direction of ['up','down']){const k=braceKeyOf(x,y,direction);BuildingMap.braces[k]=makeElement('brace',x,y,'steel');BuildingMap.braces[k].direction=direction}}resetPhysics(true);validateDesign();setStatus(`Example frame loaded for a ${NX}-bay × ${NY}-level grid: ${levels} modeled levels with mixed steel/concrete members and roof loads.`,true)}
 function saveJSON() {
@@ -2667,21 +2785,26 @@ async function processPhysicsSteps(){
  }
 }
 function animate(now){
- // Rendering continues on requestAnimationFrame while numerical kernels run asynchronously.
- // Physics retains the fixed 120 Hz step and bounded accumulator, with no overlapping step jobs.
- const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;if(!precalcActive&&!replayTimeline.length){ENVIRONMENT.windTime+=elapsed;updateAtmosphericParticles(elapsed)}
+ // Live physics and interpolated replay are mutually exclusive render/update paths.
+ const elapsed=Math.min(.05,Math.max(0,(now-previous)/1000));previous=now;
+ if(!precalcActive&&!replayPlaying&&(sim.running||!replayTimeline.length)){ENVIRONMENT.windTime+=elapsed;updateAtmosphericParticles(elapsed)}
  advanceReplay(elapsed);
- if(sim.running&&!precalcActive){
+ if(sim.running&&!precalcActive&&!replayPlaying){
   physicsAccumulator=Math.min(physicsAccumulator+elapsed,DT*MAX_PHYSICS_STEPS_PER_FRAME);
   if(!physicsStepBusy)void processPhysicsSteps();
   if(!physicsStepBusy&&(frame++%4)===0){refreshAnalysis();updateMetrics()}
   draw();
- }else if(!precalcActive&&!replayTimeline.length){physicsAccumulator=0;const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);if(swayActive){updateLateralSway(elapsed);for(const node of Object.values(sim.nodes)){if(node.referenceLevel>0&&node.isGroundConnected){const sway=sim.lateralDisp[node.referenceLevel]||0,previousSway=Number(node.windPreviewSway)||0;node.position.x=clamp(node.position.x+sway-previousSway,0,NX*STORY_HEIGHT);node.windPreviewSway=sway}}draw()}}
+ }else if(!precalcActive&&!replayPlaying&&!replayTimeline.length){
+  physicsAccumulator=0;
+  const swayActive=ENVIRONMENT.windSpeed>0||sim.lateralVel.some(v=>Math.abs(v)>.001)||sim.lateralDisp.some(v=>Math.abs(v)>.001);
+  if(swayActive){updateLateralSway(elapsed);for(const node of Object.values(sim.nodes)){if(node.referenceLevel>0&&node.isGroundConnected){const sway=sim.lateralDisp[node.referenceLevel]||0,previousSway=Number(node.windPreviewSway)||0;node.position.x=clamp(node.position.x+sway-previousSway,0,NX*STORY_HEIGHT);node.windPreviewSway=sway}}draw()}
+ }
  requestAnimationFrame(animate);
 }
 
 document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
 document.addEventListener('keydown',e=>{
+ if(precalcActive){e.preventDefault();return;}
  const target=e.target,tag=(target?.tagName||'').toLowerCase();
  if(target?.isContentEditable||['input','select','textarea'].includes(tag)||e.altKey||e.ctrlKey||e.metaKey)return;
  if(e.code==='Space'&&tag==='button')return; // Let native button activation handle Space.
@@ -2759,7 +2882,7 @@ const overlayToggle=$('overlayToggle'),overlayModeLabel=$('overlayModeLabel');
 function setSimulationOverlays(enabled){showSimulationOverlays=!!enabled;overlayToggle?.setAttribute('aria-pressed',String(showSimulationOverlays));overlayToggle?.setAttribute('aria-label',showSimulationOverlays?'Hide simulation annotations':'Show simulation annotations');overlayToggle?.setAttribute('title',showSimulationOverlays?'Hide simulation annotations (O)':'Show simulation annotations (O)');if(overlayModeLabel)overlayModeLabel.textContent=showSimulationOverlays?'Icons: On':'Icons: Off';draw()}
 overlayToggle?.addEventListener('click',()=>setSimulationOverlays(!showSimulationOverlays));
 document.addEventListener('keydown',e=>{if(e.code!=='KeyO'||e.repeat||e.altKey||e.ctrlKey||e.metaKey)return;const target=e.target,tag=(target?.tagName||'').toLowerCase();if(target?.isContentEditable||['input','select','textarea','button'].includes(tag))return;e.preventDefault();setSimulationOverlays(!showSimulationOverlays)});
-$('qualityPreset')?.addEventListener('change',e=>{const selected=e.target.value;qualityMode=selected==='auto'?'auto':selected;if(selected==='auto'){runPerformanceBenchmark()}else{applyQualityProfile(selected);const status=$('qualityStatus');if(status)status.textContent=`Manual ${QUALITY_PROFILE.label} preset. CPU probe does not override manual quality.`}});
+$('qualityPreset')?.addEventListener('change',e=>{invalidateReplay('Replay cleared because the quality preset changed.');const selected=e.target.value;qualityMode=selected==='auto'?'auto':selected;if(selected==='auto'){runPerformanceBenchmark()}else{applyQualityProfile(selected);const status=$('qualityStatus');if(status)status.textContent=`Manual ${QUALITY_PROFILE.label} preset. CPU probe does not override manual quality.`}});
 let lastBrowserComputeMode='auto';
   async function applyPhysicsComputeMode(){
    const selector=$('computeMode');let mode=selector?.value||'auto';
@@ -2853,10 +2976,10 @@ let lastBrowserComputeMode='auto';
    if(note)note.textContent=message;
    if(sub)sub.textContent=message;
   });
-  $('computeMode')?.addEventListener('change',()=>{void applyPhysicsComputeMode();});
+  $('computeMode')?.addEventListener('change',()=>{invalidateReplay('Replay cleared because the compute backend changed.');void applyPhysicsComputeMode();});
   function bindEffectSlider(id,key,outId,minFactor,maxFactor){
  const input=$(id),out=$(outId);if(!input)return;
- const apply=()=>{const percent=Number(input.value),isZero=percent<=0;EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);input.classList.toggle('is-zero-disabled',isZero);input.setAttribute('aria-valuetext',isZero?'Disabled':String(Math.round(percent))+'%');const field=input.closest('.field');field?.classList.toggle('effect-control-disabled',isZero);if(isZero&&(key==='dustDensity'||key==='dustSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='dust');if(isZero&&(key==='smokeDensity'||key==='smokeSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='smoke');if(out){out.textContent=isZero?'Disabled':String(Math.round(percent))+'%';out.setAttribute('aria-live','polite')}draw()};
+ const apply=()=>{invalidateReplay('Replay cleared because visual effect settings changed.');const percent=Number(input.value),isZero=percent<=0;EFFECT_SETTINGS[key]=clamp(percent/100,minFactor,maxFactor);input.classList.toggle('is-zero-disabled',isZero);input.setAttribute('aria-valuetext',isZero?'Disabled':String(Math.round(percent))+'%');const field=input.closest('.field');field?.classList.toggle('effect-control-disabled',isZero);if(isZero&&(key==='dustDensity'||key==='dustSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='dust');if(isZero&&(key==='smokeDensity'||key==='smokeSize'))sim.atmosphericParticles=(sim.atmosphericParticles||[]).filter(p=>p.kind!=='smoke');if(out){out.textContent=isZero?'Disabled':String(Math.round(percent))+'%';out.setAttribute('aria-live','polite')}draw()};
  input.addEventListener('input',apply);apply();
 }
 [
@@ -2870,10 +2993,10 @@ let lastBrowserComputeMode='auto';
  ['smokeDensity','smokeDensity','smokeDensityOut',0,10],
  ['smokeSize','smokeSize','smokeSizeOut',0,12.5]
 ].forEach(([id,key,out,min,max])=>bindEffectSlider(id,key,out,min,max));
-$('surfaceMoisture')?.addEventListener('input',e=>{ENVIRONMENT.moisture=clamp(Number(e.target.value)/100,0,1);$('moistureOut').textContent=`${Math.round(ENVIRONMENT.moisture*100)}%`;draw()});
-$('waterLevel')?.addEventListener('input',e=>{ENVIRONMENT.waterLevel=clamp(Number(e.target.value)/100,0,1);$('waterOut').textContent=ENVIRONMENT.waterLevel===0?'Dry':`${Math.round(ENVIRONMENT.waterLevel*100)}% height`;draw()});
-$('windSpeed')?.addEventListener('input',e=>{ENVIRONMENT.windSpeed=clamp(Number(e.target.value)||0,0,100);const out=$('windOut');if(out)out.textContent=ENVIRONMENT.windSpeed===0?'0 km/h · Calm':`${Math.round(ENVIRONMENT.windSpeed)} km/h`;refreshAnalysis();draw()});
-$('windDirection')?.addEventListener('change',e=>{ENVIRONMENT.windDirection=Number(e.target.value)<0?-1:1;refreshAnalysis();draw()});
+$('surfaceMoisture')?.addEventListener('input',e=>{invalidateReplay('Replay cleared because the environment changed.');ENVIRONMENT.moisture=clamp(Number(e.target.value)/100,0,1);$('moistureOut').textContent=`${Math.round(ENVIRONMENT.moisture*100)}%`;draw()});
+$('waterLevel')?.addEventListener('input',e=>{invalidateReplay('Replay cleared because the environment changed.');ENVIRONMENT.waterLevel=clamp(Number(e.target.value)/100,0,1);$('waterOut').textContent=ENVIRONMENT.waterLevel===0?'Dry':`${Math.round(ENVIRONMENT.waterLevel*100)}% height`;draw()});
+$('windSpeed')?.addEventListener('input',e=>{invalidateReplay('Replay cleared because the environment changed.');ENVIRONMENT.windSpeed=clamp(Number(e.target.value)||0,0,100);const out=$('windOut');if(out)out.textContent=ENVIRONMENT.windSpeed===0?'0 km/h · Calm':`${Math.round(ENVIRONMENT.windSpeed)} km/h`;refreshAnalysis();draw()});
+$('windDirection')?.addEventListener('change',e=>{invalidateReplay('Replay cleared because the environment changed.');ENVIRONMENT.windDirection=Number(e.target.value)<0?-1:1;refreshAnalysis();draw()});
 applyPhysicsComputeMode();
 runPerformanceBenchmark();
 requestAnimationFrame(animate);
