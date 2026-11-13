@@ -148,15 +148,15 @@ function interpolateInto(target, start, end, amount) {
   return false;
  }
 
- function walk(outParent, fromParent, toParent, key) {
-  if (isDiscreteKey(key)) return;
+ function walk(outParent, fromParent, toParent, key, forceDiscrete = false) {
+  const discrete = forceDiscrete || isDiscreteKey(key);
   const out = outParent[key];
   const from = fromParent[key];
   const to = toParent[key];
 
   if (typeof from === 'number' && typeof to === 'number' &&
       Number.isFinite(from) && Number.isFinite(to)) {
-   outParent[key] = from + (to - from) * alpha;
+   outParent[key] = discrete ? from : from + (to - from) * alpha;
    return;
   }
   if (ArrayBuffer.isView(from) && ArrayBuffer.isView(to) &&
@@ -165,16 +165,21 @@ function interpolateInto(target, start, end, amount) {
       from.length === out.length && !(from instanceof DataView)) {
    if (typeof BigInt64Array !== 'undefined' &&
        (from instanceof BigInt64Array || from instanceof BigUint64Array)) return;
-   for (let i = 0; i < from.length; i++) out[i] = from[i] + (to[i] - from[i]) * alpha;
+   for (let i = 0; i < from.length; i++) {
+    out[i] = discrete ? from[i] : from[i] + (to[i] - from[i]) * alpha;
+   }
    return;
   }
   if (!from || !to || !out || typeof from !== 'object' ||
-      typeof to !== 'object' || typeof out !== 'object') return;
+      typeof to !== 'object' || typeof out !== 'object') {
+   if (discrete) outParent[key] = from;
+   return;
+  }
   if (alreadyVisited(from, to)) return;
 
   if (Array.isArray(from) && Array.isArray(to) && Array.isArray(out)) {
    if (from.length !== to.length || from.length !== out.length) return;
-   for (let i = 0; i < from.length; i++) walk(out, from, to, i);
+   for (let i = 0; i < from.length; i++) walk(out, from, to, i, discrete);
    return;
   }
   if (Array.isArray(from) || Array.isArray(to) || Array.isArray(out)) return;
@@ -182,8 +187,7 @@ function interpolateInto(target, start, end, amount) {
       Object.getPrototypeOf(from) !== Object.getPrototypeOf(out)) return;
 
   for (const property of Reflect.ownKeys(from)) {
-   if (isDiscreteKey(property) ||
-       !Object.prototype.hasOwnProperty.call(to, property) ||
+   if (!Object.prototype.hasOwnProperty.call(to, property) ||
        !Object.prototype.hasOwnProperty.call(out, property)) continue;
    const fromDescriptor = Object.getOwnPropertyDescriptor(from, property);
    const toDescriptor = Object.getOwnPropertyDescriptor(to, property);
@@ -191,7 +195,7 @@ function interpolateInto(target, start, end, amount) {
    if (!fromDescriptor || !toDescriptor || !outDescriptor ||
        !('value' in fromDescriptor) || !('value' in toDescriptor) ||
        !('value' in outDescriptor)) continue;
-   walk(out, from, to, property);
+   walk(out, from, to, property, discrete);
   }
  }
 
