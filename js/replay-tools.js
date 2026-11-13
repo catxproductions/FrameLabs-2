@@ -26,7 +26,7 @@ function cloneGraph(value, seen = new WeakMap()) {
  }
  if (isSharedArrayBuffer(value)) {
   const copy = new value.constructor(value.byteLength);
-  new value.constructor(copy).set(new value.constructor(value));
+  new Uint8Array(copy).set(new Uint8Array(value));
   seen.set(value, copy);
   return copy;
  }
