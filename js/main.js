@@ -177,86 +177,201 @@ class Connection {
 let BuildingMap=newBuildingMap();let mode='build',hover={x:0,y:1,valid:false},dragging=false,lastDragKey='',lastDragPt=null,buildLastCell=null,buildPainted=new Set(),lastAnalysis=null,frame=0,previous=performance.now();
 let sim=newPhysicsState();
 const replayConfig={checkpointSteps:30,maxBytes:64*1024*1024,maxSteps:1200};
-let precalcActive=false,precalcCancelRequested=false,replayTimeline=[],replayPlaying=false,replayElapsed=0,replayIndex=0,replayBakeId=0,replayFingerprintAtBake='';
+let precalcActive=false,precalcCancelRequested=false,replayTimeline=[],replayPlaying=false,replayPlayhead=0,replayIndex=0,replayBakeId=0,replayFingerprintAtBake='';
+let replayRevision=0,replayRevisionAtBake=-1,replayWorkingState=null,replayWorkingSegment=-1,replayRenderFrames=0;
 function cloneReplayGraph(value){return window.FrameLabReplayTools.cloneGraph(value)}
-function captureReplayState(){const state=cloneReplayGraph({sim,BuildingMap,environment:ENVIRONMENT,NX,NY});state.sim.running=false;return state}
+function captureReplayState(){
+ const state=cloneReplayGraph({sim,BuildingMap,environment:ENVIRONMENT,NX,NY,physicsAccumulator,wasRunning:!!sim.running});
+ state.sim.running=false;
+ return state;
+}
 function replayStateBytes(state){return window.FrameLabReplayTools.estimateBytes(state)}
-function restoreReplayState(saved){
- const state=cloneReplayGraph(saved);sim=state.sim;BuildingMap=state.BuildingMap;NX=state.NX;NY=state.NY;
+function restoreReplayState(saved,options={}){
+ const state=cloneReplayGraph(saved);
+ sim=state.sim;BuildingMap=state.BuildingMap;NX=state.NX;NY=state.NY;
  DX=(GRID_RIGHT-GRID_LEFT)/NX;STORY_PX=(GROUND_Y-120)/NY;Object.assign(ENVIRONMENT,state.environment);
- sim.running=false;physicsAccumulator=0;gravityTether=null;dragging=false;
+ sim.running=!!options.restoreRunState&&!!state.wasRunning;
+ physicsAccumulator=options.restoreRunState?Math.max(0,Number(state.physicsAccumulator)||0):0;
+ gravityTether=null;dragging=false;lastDragKey='';lastDragPt=null;buildLastCell=null;
+ previous=performance.now();
  $('baysInput').value=NX;$('levelsInput').value=NY;$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;
- refreshAnalysis();updateMetrics();draw();syncButtons();
+ refreshAnalysis();updateMetrics();draw();syncButtons();updateReplayControls();
 }
 function replayFingerprint(){
  const design={NX,NY,members:{},environment:{moisture:ENVIRONMENT.moisture,waterLevel:ENVIRONMENT.waterLevel,windSpeed:ENVIRONMENT.windSpeed,windDirection:ENVIRONMENT.windDirection},computeMode:$('computeMode')?.value,quality:$('qualityPreset')?.value};
  for(const group of Object.keys(BuildingMap).sort())design.members[group]=Object.entries(BuildingMap[group]||{}).sort(([a],[b])=>a.localeCompare(b)).map(([key,e])=>[key,e.x,e.y,e.material,e.mass,e.capacity,e.kind,e.direction]);
  try{return JSON.stringify(design)}catch(_){return ''}
 }
+function replayEventSignature(){
+ const memberEvents=[];
+ for(const group of ['columns','beams','slabs','braces']){
+  for(const [key,e] of Object.entries(BuildingMap[group]||{})){
+   const flags=[e.failed,e.snapped,e.burning,e.detonated].map(Boolean);
+   if(flags.some(Boolean))memberEvents.push(`${group}:${key}:${flags.map(Number).join('')}`);
+  }
+ }
+ const brokenConnections=Object.entries(sim.connectionStates||{}).filter(([,state])=>state?.broken).map(([key])=>key).sort();
+ return JSON.stringify([sim.localFailureCount||0,sim.debris?.length||0,sim.explosionEffects?.length||0,sim.lastEvent||'',memberEvents,brokenConnections]);
+}
 function setReplayStatus(message){const node=$('replayStatus');if(node)node.textContent=message}
 function updateReplayControls(){
- const has=replayTimeline.length>1,slider=$('replayTimeline');$('replayPlay').disabled=!has||replayPlaying;$('replayPause').disabled=!has||!replayPlaying;$('replayStop').disabled=!has;
- slider.disabled=!has;slider.max=String(Math.max(0,replayTimeline.length-1));slider.value=String(Math.min(replayIndex,Math.max(0,replayTimeline.length-1)));
- const state=replayTimeline[replayIndex];$('replayTimeLabel').textContent=state?`${Number(state.sim.time).toFixed(2)} s`:'0.00 s';
+ const has=replayTimeline.length>1,slider=$('replayTimeline');
+ const first=has?Number(replayTimeline[0].sim.time)||0:0;
+ const last=has?Number(replayTimeline[replayTimeline.length-1].sim.time)||first:first;
+ $('replayPlay').disabled=!has||replayPlaying;$('replayPause').disabled=!has||!replayPlaying;$('replayStop').disabled=!has;
+ slider.disabled=!has;slider.min=String(first);slider.max=String(Math.max(first,last));slider.step='0.01';
+ slider.value=String(Math.max(first,Math.min(last,Number(replayPlayhead)||first)));
+ $('replayTimeLabel').textContent=`${(has?Math.max(first,Math.min(last,Number(replayPlayhead)||first)):0).toFixed(2)} s`;
 }
-function stopReplayPlayback(){replayPlaying=false;replayElapsed=0;updateReplayControls()}
-function seekReplay(index){
- if(!replayTimeline.length)return;
- if(replayFingerprint()!==replayFingerprintAtBake){stopReplayPlayback();setReplayStatus('Replay is stale: design, environment, or compute settings changed. Bake again before replaying.');return}
- replayIndex=Math.max(0,Math.min(replayTimeline.length-1,Math.round(Number(index)||0)));stopReplayPlayback();restoreReplayState(replayTimeline[replayIndex]);updateReplayControls();
- setReplayStatus(`Replay checkpoint ${replayIndex+1}/${replayTimeline.length} · ${Number(sim.time).toFixed(2)} s. Timeline seeks recorded physics checkpoints.`);
+function stopReplayPlayback(){replayPlaying=false;updateReplayControls()}
+function clearReplayRecording(message){
+ const hadRecording=replayTimeline.length>0||replayPlaying;
+ replayPlaying=false;replayTimeline=[];replayIndex=0;replayPlayhead=0;
+ replayFingerprintAtBake='';replayRevisionAtBake=-1;replayWorkingState=null;replayWorkingSegment=-1;
+ updateReplayControls();
+ if(message&&hadRecording)setReplayStatus(message);
+ return hadRecording;
+}
+function invalidateReplay(message='Replay cleared because the simulation changed. Bake again to create a current recording.'){
+ if(precalcActive)return false;
+ replayRevision++;
+ return clearReplayRecording(message);
+}
+function replayIsValid(){
+ if(!replayTimeline.length)return false;
+ if(replayRevision!==replayRevisionAtBake||replayFingerprint()!==replayFingerprintAtBake){
+  clearReplayRecording('Replay is outdated because the design, simulation, environment, or compute settings changed. Pre-calculate again before replaying.');
+  return false;
+ }
+ return true;
+}
+function applyReplayWorkingState(state,refresh=false){
+ sim=state.sim;BuildingMap=state.BuildingMap;NX=state.NX;NY=state.NY;
+ DX=(GRID_RIGHT-GRID_LEFT)/NX;STORY_PX=(GROUND_Y-120)/NY;Object.assign(ENVIRONMENT,state.environment);
+ sim.running=false;physicsAccumulator=0;gravityTether=null;dragging=false;
+ if(refresh){refreshAnalysis();updateMetrics()}
+ draw();
+}
+function findReplaySegment(time){
+ let low=0,high=replayTimeline.length-1;
+ while(low<high){
+  const middle=Math.ceil((low+high)/2);
+  if(Number(replayTimeline[middle].sim.time)<=time)low=middle;
+  else high=middle-1;
+ }
+ return low;
+}
+function renderReplayAtTime(time,forceRefresh=false){
+ if(!replayTimeline.length)return false;
+ const firstTime=Number(replayTimeline[0].sim.time)||0;
+ const lastTime=Number(replayTimeline[replayTimeline.length-1].sim.time)||firstTime;
+ replayPlayhead=Math.max(firstTime,Math.min(lastTime,Number(time)||firstTime));
+ replayIndex=findReplaySegment(replayPlayhead);
+ if(replayIndex>=replayTimeline.length-1){
+  if(replayWorkingSegment!==replayIndex){
+   replayWorkingState=cloneReplayGraph(replayTimeline[replayIndex]);
+   replayWorkingSegment=replayIndex;
+  }
+ }else{
+  if(replayWorkingSegment!==replayIndex){
+   replayWorkingState=cloneReplayGraph(replayTimeline[replayIndex]);
+   replayWorkingSegment=replayIndex;
+  }
+  const from=replayTimeline[replayIndex],to=replayTimeline[replayIndex+1];
+  const fromTime=Number(from.sim.time)||0,toTime=Number(to.sim.time)||fromTime;
+  const alpha=toTime>fromTime?clamp((replayPlayhead-fromTime)/(toTime-fromTime),0,1):0;
+  window.FrameLabReplayTools.interpolateInto(replayWorkingState,from,to,alpha);
+ }
+ applyReplayWorkingState(replayWorkingState,forceRefresh||((replayRenderFrames++%4)===0));
+ updateReplayControls();
+ return true;
+}
+function seekReplay(time){
+ if(!replayIsValid())return;
+ stopReplayPlayback();
+ if(sim.running){sim.running=false;physicsAccumulator=0;syncButtons()}
+ renderReplayAtTime(time,true);
+ setReplayStatus(`Replay position ${sim.time.toFixed(2)} s · interpolated between recorded physics checkpoints.`);
 }
 async function runPrecalculation(){
  if(precalcActive)return;
  if(!totalCount()&&!sim.debris.length){setStatus('Build at least one component before pre-calculating physics.',false);return}
  if(physicsStepBusy){setStatus('Wait for the current physics step to finish, then start pre-calculation.',false);return}
+ invalidateReplay('Previous replay recording replaced by a new pre-calculation.');
  stopReplayPlayback();precalcActive=true;precalcCancelRequested=false;const bakeId=++replayBakeId;
  const controls=[...document.querySelectorAll('.panel button,.panel input,.panel select')].filter(el=>el.id!=='cancelPrecalculate');
  const previousDisabled=new Map(controls.map(el=>[el,el.disabled]));for(const el of controls)el.disabled=true;
+ const previousPointerEvents=canvas.style.pointerEvents,previousAriaDisabled=canvas.getAttribute('aria-disabled');
+ canvas.style.pointerEvents='none';canvas.setAttribute('aria-disabled','true');
+ dragging=false;lastDragKey='';lastDragPt=null;buildLastCell=null;
  $('cancelPrecalculate').disabled=false;$('precalculate').textContent='Baking…';
  const progress=$('precalcProgress');progress.max=1;progress.value=0;
  let baseline=null,timeline=[],usedBytes=0,completed=0,limit=Math.max(1,Math.min(replayConfig.maxSteps,Math.round(Number($('precalcDuration').value||5)/DT))),memoryLimited=false;
  try{
   baseline=captureReplayState();usedBytes=replayStateBytes(baseline);timeline.push(baseline);
+  if(usedBytes>replayConfig.maxBytes)throw new Error('The starting state exceeds the 64 MiB replay memory budget.');
   sim.running=true;sim.peakUtil=lastAnalysis?.maxUtil||0;physicsAccumulator=0;
+  let lastEventSignature=replayEventSignature();
   setReplayStatus(`Pre-calculating 0.00 / ${(limit*DT).toFixed(2)} seconds…`);
   for(let i=1;i<=limit;i++){
    if(precalcCancelRequested||bakeId!==replayBakeId)break;
    await stepPhysics(DT);completed=i;
-   if(i%replayConfig.checkpointSteps===0||i===limit||!sim.running){
+   const eventSignature=replayEventSignature(),eventChanged=eventSignature!==lastEventSignature;
+   if(eventChanged)lastEventSignature=eventSignature;
+   if(i%replayConfig.checkpointSteps===0||eventChanged||i===limit||!sim.running){
     const checkpoint=captureReplayState(),bytes=replayStateBytes(checkpoint);
     if(usedBytes+bytes>replayConfig.maxBytes){memoryLimited=true;break}
     timeline.push(checkpoint);usedBytes+=bytes;
    }
    progress.value=i/limit;
-   if(i%6===0){setReplayStatus(`Pre-calculating ${(i*DT).toFixed(2)} / ${(limit*DT).toFixed(2)} seconds · ${Math.round(i/limit*100)}% · ${Math.ceil(usedBytes/1048576)} MB estimated`);await new Promise(resolve=>setTimeout(resolve,0))}
+   if(i%6===0){setReplayStatus(`Pre-calculating ${(i*DT).toFixed(2)} / ${(limit*DT).toFixed(2)} seconds · ${Math.round(i/limit*100)}% · ${Math.ceil(usedBytes/1048576)} MiB estimated`);await new Promise(resolve=>setTimeout(resolve,0))}
    if(!sim.running)break;
   }
-  if(precalcCancelRequested||bakeId!==replayBakeId){restoreReplayState(baseline);setReplayStatus('Pre-calculation cancelled; original simulation state restored.');return}
-  replayTimeline=timeline;replayIndex=0;restoreReplayState(baseline);replayFingerprintAtBake=replayFingerprint();updateReplayControls();
-  if(memoryLimited)setReplayStatus(`Bake stopped at the 64 MB replay memory budget. Saved ${replayTimeline.length} checkpoints; shorten the duration or use a smaller design.`);
-  else if(replayTimeline.length>1)setReplayStatus(`Bake complete: ${replayTimeline.length} checkpoints across ${Number(replayTimeline[replayTimeline.length-1].sim.time-replayTimeline[0].sim.time).toFixed(2)} simulated seconds · ${Math.ceil(usedBytes/1048576)} MB estimated. Replay supports seek, pause, and speed controls.`);
+  if(precalcCancelRequested||bakeId!==replayBakeId){
+   replayTimeline=[];setReplayStatus('Pre-calculation cancelled; the original simulation state will be restored.');
+   return;
+  }
+  replayTimeline=timeline;replayIndex=0;replayPlayhead=Number(timeline[0]?.sim.time)||0;
+  replayRevisionAtBake=replayRevision;replayFingerprintAtBake=replayFingerprint();
+  replayWorkingState=null;replayWorkingSegment=-1;
+  if(memoryLimited)setReplayStatus(`Bake stopped at the 64 MiB replay budget. Saved ${replayTimeline.length} checkpoints; shorten the duration or use a smaller design.`);
+  else if(replayTimeline.length>1)setReplayStatus(`Bake complete: ${replayTimeline.length} checkpoints across ${(Number(replayTimeline[replayTimeline.length-1].sim.time)-Number(replayTimeline[0].sim.time)).toFixed(2)} simulated seconds · ${Math.ceil(usedBytes/1048576)} MiB estimated. Replay now interpolates between checkpoints and preserves recorded event boundaries.`);
   else setReplayStatus('No replay checkpoints were produced. Try a longer duration or a smaller model.');
- }catch(error){if(baseline)restoreReplayState(baseline);replayTimeline=[];updateReplayControls();setReplayStatus(`Pre-calculation failed safely: ${error?.message||'unknown error'}. Starting state restored.`)}
- finally{
-  if(baseline&&sim.running)restoreReplayState(baseline);
-  precalcActive=false;precalcCancelRequested=false;physicsAccumulator=0;
+ }catch(error){
+  replayTimeline=[];replayWorkingState=null;replayWorkingSegment=-1;
+  setReplayStatus(`Pre-calculation failed safely: ${error?.message||'unknown error'}. The original simulation state will be restored.`);
+ }finally{
+  if(baseline)restoreReplayState(baseline,{restoreRunState:true});
+  precalcActive=false;precalcCancelRequested=false;physicsAccumulator=baseline?Math.max(0,Number(baseline.physicsAccumulator)||0):0;
   for(const el of controls)el.disabled=previousDisabled.get(el);
-  $('cancelPrecalculate').disabled=true;$('precalculate').textContent='Pre-calculate';progress.value=completed/limit;updateReplayControls();draw();
+  canvas.style.pointerEvents=previousPointerEvents;
+  if(previousAriaDisabled==null)canvas.removeAttribute('aria-disabled');else canvas.setAttribute('aria-disabled',previousAriaDisabled);
+  $('cancelPrecalculate').disabled=true;$('precalculate').textContent='Pre-calculate';progress.value=completed/limit;
+  updateReplayControls();previous=performance.now();draw();
  }
 }
 function cancelPrecalculation(){if(!precalcActive)return;precalcCancelRequested=true;replayBakeId++;$('cancelPrecalculate').disabled=true;setReplayStatus('Cancelling after the current solver step…')}
 function startReplayPlayback(){
- if(replayTimeline.length<2)return;
- if(replayFingerprint()!==replayFingerprintAtBake){setReplayStatus('Replay is stale: design, environment, or compute settings changed. Bake again before replaying.');return}
- if(replayIndex>=replayTimeline.length-1)seekReplay(0);
- replayPlaying=true;replayElapsed=0;updateReplayControls();setReplayStatus('Replay playing from recorded checkpoints.');
+ if(!replayIsValid())return;
+ if(sim.running){sim.running=false;physicsAccumulator=0;syncButtons()}
+ const firstTime=Number(replayTimeline[0].sim.time)||0,lastTime=Number(replayTimeline[replayTimeline.length-1].sim.time)||firstTime;
+ if(replayPlayhead>=lastTime-1e-6)replayPlayhead=firstTime;
+ renderReplayAtTime(replayPlayhead,true);
+ replayPlaying=true;updateReplayControls();setReplayStatus('Replay playing with continuous interpolation between recorded checkpoints.');
 }
 function advanceReplay(elapsed){
  if(!replayPlaying||precalcActive||replayTimeline.length<2)return;
- replayElapsed+=elapsed*Math.max(.05,Number($('replaySpeed').value)||1);const interval=replayConfig.checkpointSteps*DT;
- while(replayElapsed>=interval&&replayPlaying){replayElapsed-=interval;if(replayIndex>=replayTimeline.length-1){stopReplayPlayback();setReplayStatus('Replay finished. Seek the timeline to inspect a recorded checkpoint.');break}replayIndex++;restoreReplayState(replayTimeline[replayIndex]);updateReplayControls()}
+ if(!replayIsValid())return;
+ const endTime=Number(replayTimeline[replayTimeline.length-1].sim.time)||replayPlayhead;
+ replayPlayhead+=Math.max(0,Number(elapsed)||0)*Math.max(.05,Number($('replaySpeed').value)||1);
+ if(replayPlayhead>=endTime){
+  renderReplayAtTime(endTime,true);stopReplayPlayback();
+  setReplayStatus('Replay finished. Seek the timeline to inspect any recorded moment.');
+  return;
+ }
+ renderReplayAtTime(replayPlayhead);
 }
+
 
 function countOutOfBounds(bays,levels){
  let removed=0;
