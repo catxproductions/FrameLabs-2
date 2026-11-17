@@ -2699,8 +2699,32 @@ document.addEventListener('keydown',e=>{
  else if(e.code==='Space'){e.preventDefault();startOrPause()}
  else if(e.key==='Escape'){dragging=false;lastDragKey='';lastDragPt=null;hover.valid=false;draw()}
 });$('componentType').addEventListener('change',()=>{buildPainted=new Set();updateToolStatus();draw()});$('braceDirection').addEventListener('change',draw);$('loadAmount').addEventListener('input',()=>{$('loadOut').textContent=Number($('loadAmount').value).toFixed(1)});$('explosionPower').addEventListener('input',()=>{$('explosionOut').textContent=$('explosionPower').value;updateToolStatus()});$('applyDimensions').addEventListener('click',()=>configureGridDimensions($('baysInput').value,$('levelsInput').value));$('baysInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('levelsInput').addEventListener('keydown',e=>{if(e.key==='Enter')configureGridDimensions($('baysInput').value,$('levelsInput').value)});$('displayMode').addEventListener('change',draw);$('validate').addEventListener('click',validateDesign);$('simulate').addEventListener('click',startOrPause);$('precalculate').addEventListener('click',()=>void runPrecalculation());$('cancelPrecalculate').addEventListener('click',cancelPrecalculation);$('replayTimeline').addEventListener('input',e=>seekReplay(e.target.value));$('replayPlay').addEventListener('click',startReplayPlayback);$('replayPause').addEventListener('click',()=>{stopReplayPlayback();setReplayStatus('Replay paused. Seek the timeline or press Replay to continue.');});$('replayStop').addEventListener('click',()=>{stopReplayPlayback();seekReplay(0);setReplayStatus('Replay stopped at the first checkpoint.');});$('resetPhysics').addEventListener('click',()=>{if(replayTimeline.length){replayTimeline=[];stopReplayPlayback();updateReplayControls();setReplayStatus('Replay cleared because physics was reset. Bake again to record a new run.')}resetPhysics(true);setStatus('Physics reset. Member integrity and joint motion were restored; the design layout was preserved.',true);setStatus('Physics reset. Run Validate for a fresh written assessment of the restored design.',false)});$('example').addEventListener('click',exampleFrame);$('loadExample').addEventListener('click',loadSelectedExample);$('exampleFrames').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();loadSelectedExample()}});$('clear').addEventListener('click',clearDesign);$('save').addEventListener('click',saveJSON);$('loadJson').addEventListener('click',()=>$('fileInput').click());$('fileInput').addEventListener('change',e=>{loadJSONFile(e.target.files?.[0]);e.target.value=''});canvas.addEventListener('pointerdown',handleCanvasDown);canvas.addEventListener('pointermove',handlePointerMove);canvas.addEventListener('pointerup',handlePointerUp);canvas.addEventListener('pointercancel',handlePointerUp);canvas.addEventListener('pointerleave',()=>{if(!dragging){hover.valid=false;draw()}});$('loadOut').textContent=Number($('loadAmount').value).toFixed(1);$('explosionOut').textContent=$('explosionPower').value;$('windOut')&&($('windOut').textContent='0 km/h · Calm');$('gridSizeLabel').textContent=`Grid: ${NX} bays × ${NY} levels`;setMode('build');refreshAll();syncButtons();
+
 const cpuWarning=$('cpuWarning'),dismissCpuWarning=$('dismissCpuWarning');
-if(dismissCpuWarning) dismissCpuWarning.addEventListener('click',()=>{if(cpuWarning?.close)cpuWarning.close();else cpuWarning?.removeAttribute('open')});
+const outdatedWarning=$('outdatedWarning'),dismissOutdatedWarning=$('dismissOutdatedWarning');
+let outdatedWarningQueued=false;
+const showDialogAfterFrame=dialog=>{
+ if(!dialog)return;
+ requestAnimationFrame(()=>{
+  if(typeof dialog.showModal==='function'){
+   try{if(!dialog.open)dialog.showModal()}catch(_){dialog.setAttribute('open','')}
+  }else dialog.setAttribute('open','');
+ });
+};
+const showOutdatedWarning=()=>{
+ if(outdatedWarningQueued)return;
+ outdatedWarningQueued=true;
+ showDialogAfterFrame(outdatedWarning);
+};
+if(cpuWarning)cpuWarning.addEventListener('close',showOutdatedWarning);
+if(dismissCpuWarning)dismissCpuWarning.addEventListener('click',()=>{
+ if(cpuWarning?.close)cpuWarning.close();
+ else{cpuWarning?.removeAttribute('open');showOutdatedWarning()}
+});
+if(dismissOutdatedWarning)dismissOutdatedWarning.addEventListener('click',()=>{
+ if(outdatedWarning?.close)outdatedWarning.close();
+ else outdatedWarning?.removeAttribute('open');
+});
 // Show on every page load; intentionally do not persist dismissal between visits.
 if(cpuWarning){if(typeof cpuWarning.showModal==='function'){try{cpuWarning.showModal()}catch(_){cpuWarning.setAttribute('open','')}}else cpuWarning.setAttribute('open','')}
 const viewModeToggle=$('viewModeToggle'),viewModeLabel=$('viewModeLabel');
