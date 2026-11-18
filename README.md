@@ -63,11 +63,11 @@ The native helper requires the Vulkan SDK/runtime (including `glslc`) and a comp
 
 ## Pre-calculation and replay
 
-- **Pre-calculate** advances the existing authoritative `stepPhysics(DT)` solver ahead of wall-clock time, yields between small batches so the page can update progress, and supports cancellation. The starting simulation state is restored when baking finishes or is cancelled.
-- The bake stores full-state graph snapshots at 0.25-second simulation intervals. Replay offers timeline seeking, play/pause/stop, and 0.25×, 0.5×, 1×, and 2× playback speeds. Seeking restores a recorded checkpoint; it does not integrate intermediate frames between checkpoints.
-- Snapshot cloning preserves object prototypes, cycles, shared references, and typed arrays so structural links continue to reference the cloned members and nodes. An estimated 64 MiB checkpoint budget bounds memory use; very large designs may stop baking early.
-- Replay checks the design layout, environment inputs, quality preset, and compute backend before playback. If those inputs no longer match, bake again. The checkpoints are an in-memory session feature and are not exported in the BuildingMap JSON file.
-- Pre-calculation uses the selected compute backend through the same solver path; it does not create a second physics engine. Replay is a playback of recorded checkpoints, not a validated engineering analysis or a guarantee of bit-for-bit deterministic recomputation.
+- **Pre-calculate** advances the existing authoritative `stepPhysics(DT)` solver ahead of wall-clock time, yields between small batches so the page can update progress, and supports cancellation. It restores the exact starting simulation state, including whether physics was running and its accumulator, after completion, cancellation, or failure.
+- Full-state graph snapshots are recorded every 0.25 simulated seconds and at detected structural/fire/explosion state transitions. Replay uses a time-based timeline and interpolates continuous numeric state on animation frames; discrete flags and arrays whose structure changes remain at the prior checkpoint until the event checkpoint is reached.
+- Snapshot cloning preserves object prototypes, cycles, shared references, typed-array backing buffers, and DataView offsets. The 64 MiB estimated checkpoint budget remains in place; large designs or event-heavy collapses may produce a shorter recording.
+- Replay is invalidated when the user edits the canvas, changes grid dimensions, resets physics, changes the environment/compute/quality settings, or resumes live simulation. Canvas input and keyboard simulation shortcuts are locked during baking; cancellation remains available.
+- Playback does not run a second physics solver. It interpolates recorded states for presentation, with recorded failure and material-state transitions retained at checkpoint boundaries. The replay is an in-memory session feature and is not exported in the BuildingMap JSON file; it is not a validated engineering analysis or a guarantee of bit-for-bit deterministic recomputation.
 
 ## Rendering and modeling limits
 
